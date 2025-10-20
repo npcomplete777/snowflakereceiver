@@ -1,4 +1,4 @@
-module github.com/npcomplete777/snowflakereceiver/receiver
+module github.com/npcomplete777/snowflakereceiver/snowflakereceiver
 
 go 1.24
 

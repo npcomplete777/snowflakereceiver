@@ -5,7 +5,7 @@ dist:
   otelcol_version: 0.135.0
 
 receivers:
-  - gomod: github.com/npcomplete777/snowflakereceiver/receiver v0.0.0
+  - gomod: github.com/npcomplete777/snowflakereceiver/snowflakereceiver v0.0.0
 
 exporters:
   - gomod: go.opentelemetry.io/collector/exporter/debugexporter v0.135.0
@@ -18,5 +18,5 @@ extensions:
   - gomod: go.opentelemetry.io/collector/extension/zpagesextension v0.135.0
 
 replaces:
-  - github.com/npcomplete777/snowflakereceiver/receiver => /home/azureuser/snowflakereceiver/receiver
+  - github.com/npcomplete777/snowflakereceiver/snowflakereceiver => /home/azureuser/snowflakereceiver/snowflakereceiver
   - github.com/npcomplete777/snowflakereceiver => /home/azureuser/snowflakereceiver
