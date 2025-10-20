@@ -28,41 +28,6 @@ We match or exceed DataDog and Dynatrace on **all implementable features**:
 | Organization Metrics | Yes | No | **Yes** ✅ |
 | Event Tables | Yes | No | **Yes** ✅ |
 | Cost in $$ | Yes | No | No ❌ |
-
-### Recommended First Config
-
-**Start with `config-per-metric-intervals.yaml`** - Shows all 300+ metrics with optimized performance:
-```bash
-# Copy the recommended config
-cp config-per-metric-intervals.yaml config.yaml
-
-# Edit with your credentials
-vi config.yaml
-# Replace: YOUR_SNOWFLAKE_USER, YOUR_SNOWFLAKE_PASSWORD, your-account-name
-# Replace: YOUR_TENANT.live.dynatrace.com, YOUR_DYNATRACE_API_TOKEN
-
-# Run the collector
-./otelcol-snowflake/otelcol-snowflake --config config.yaml
-
-# Verify it's working (should see no errors)
-# Check Dynatrace after 5-10 minutes for metrics starting with "snowflake.*"
-```
-
-**What you'll see:**
-- ~300 metrics across 11 categories
-- Real-time query and warehouse metrics (1min lag)
-- Historical query performance (5min lag)
-- Credit usage tracking (5min lag)
-- Storage metrics (30min lag)
-- Login, pipe, task, replication, clustering metrics
-
-**Metrics to search for:**
-- `snowflake.current_queries.count` - Real-time query activity
-- `snowflake.warehouse.queries_running` - Live warehouse load
-- `snowflake.query.execution_time` - Query performance
-- `snowflake.warehouse.credit_usage` - Cost tracking
-- `snowflake.storage.total` - Storage consumption
-
 | SIEM/Anomaly Detection | Yes | Yes | No ❌ |
 | Open Source | No | No | **Yes** ✅ |
 
@@ -86,7 +51,7 @@ cd snowflakereceiver
 ocb --config builder-config-snowflake.yaml
 
 # Create config file (see examples below)
-cp config-per-metric-intervals.yaml config.yaml
+cp config-recommended.yaml config.yaml
 # Edit with your credentials
 
 # Run collector
@@ -589,7 +554,7 @@ Failed to query org credit usage: invalid identifier 'CREDITS_USED'
 ## 📦 Project Structure
 ```
 snowflakereceiver/
-├── receiver/
+├── snowflakereceiver/
 │   ├── client.go          # Snowflake queries for all data sources
 │   ├── config.go          # Configuration with per-metric intervals
 │   ├── scraper.go         # Metric transformation and interval logic
@@ -611,13 +576,13 @@ snowflakereceiver/
 ### Run Tests
 ```bash
 # All tests
-go test ./receiver -v
+go test ./snowflakereceiver -v
 
 # With coverage
-go test ./receiver -cover
+go test ./snowflakereceiver -cover
 
 # Generate HTML report
-go test ./receiver -coverprofile=coverage.out
+go test ./snowflakereceiver -coverprofile=coverage.out
 go tool cover -html=coverage.out
 ```
 
