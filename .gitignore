@@ -33,10 +33,3 @@ coverage.html
 COVERAGE_REPORT.txt
 BUILD_INFO.txt
 *.test
-
-# Test artifacts
-coverage.out
-coverage.html
-COVERAGE_REPORT.txt
-BUILD_INFO.txt
-*.test
