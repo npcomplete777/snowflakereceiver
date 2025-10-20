@@ -4,6 +4,7 @@ import (
     "context"
     "database/sql"
     "fmt"
+    "time"
     
     sf "github.com/snowflakedb/gosnowflake"
     "go.uber.org/zap"
@@ -71,7 +72,7 @@ func (c *snowflakeClient) queryMetrics(ctx context.Context) (*snowflakeMetrics, 
     metrics := &snowflakeMetrics{}
     
     // INFORMATION_SCHEMA queries (REAL-TIME - no latency!)
-    if c.config.Metrics.CurrentQueries {
+    if c.config.Metrics.CurrentQueries.Enabled {
         queries, err := c.queryCurrentQueries(ctx)
         if err != nil {
             c.logger.Warn("Failed to query current queries", zap.Error(err))
@@ -80,7 +81,7 @@ func (c *snowflakeClient) queryMetrics(ctx context.Context) (*snowflakeMetrics, 
         }
     }
     
-    if c.config.Metrics.WarehouseLoad {
+    if c.config.Metrics.WarehouseLoad.Enabled {
         load, err := c.queryWarehouseLoadHistory(ctx)
         if err != nil {
             c.logger.Warn("Failed to query warehouse load", zap.Error(err))
@@ -90,7 +91,7 @@ func (c *snowflakeClient) queryMetrics(ctx context.Context) (*snowflakeMetrics, 
     }
     
     // ACCOUNT_USAGE queries (45min-3hr latency)
-    if c.config.Metrics.QueryHistory {
+    if c.config.Metrics.QueryHistory.Enabled {
         stats, err := c.queryQueryStats(ctx)
         if err != nil {
             c.logger.Warn("Failed to query query stats", zap.Error(err))
@@ -99,7 +100,7 @@ func (c *snowflakeClient) queryMetrics(ctx context.Context) (*snowflakeMetrics, 
         }
     }
     
-    if c.config.Metrics.CreditUsage {
+    if c.config.Metrics.CreditUsage.Enabled {
         credits, err := c.queryWarehouseCreditUsage(ctx)
         if err != nil {
             c.logger.Warn("Failed to query credit usage", zap.Error(err))
@@ -108,7 +109,7 @@ func (c *snowflakeClient) queryMetrics(ctx context.Context) (*snowflakeMetrics, 
         }
     }
     
-    if c.config.Metrics.StorageMetrics {
+    if c.config.Metrics.StorageMetrics.Enabled {
         storage, err := c.queryStorageUsage(ctx)
         if err != nil {
             c.logger.Warn("Failed to query storage usage", zap.Error(err))
@@ -117,7 +118,7 @@ func (c *snowflakeClient) queryMetrics(ctx context.Context) (*snowflakeMetrics, 
         }
     }
     
-    if c.config.Metrics.LoginHistory {
+    if c.config.Metrics.LoginHistory.Enabled {
         logins, err := c.queryLoginHistory(ctx)
         if err != nil {
             c.logger.Warn("Failed to query login history", zap.Error(err))
@@ -126,7 +127,7 @@ func (c *snowflakeClient) queryMetrics(ctx context.Context) (*snowflakeMetrics, 
         }
     }
     
-    if c.config.Metrics.DataPipeline {
+    if c.config.Metrics.DataPipeline.Enabled {
         pipes, err := c.queryPipeUsage(ctx)
         if err != nil {
             c.logger.Warn("Failed to query pipe usage", zap.Error(err))
@@ -135,7 +136,7 @@ func (c *snowflakeClient) queryMetrics(ctx context.Context) (*snowflakeMetrics, 
         }
     }
     
-    if c.config.Metrics.DatabaseStorage {
+    if c.config.Metrics.DatabaseStorage.Enabled {
         dbStorage, err := c.queryDatabaseStorage(ctx)
         if err != nil {
             c.logger.Warn("Failed to query database storage", zap.Error(err))
@@ -144,7 +145,7 @@ func (c *snowflakeClient) queryMetrics(ctx context.Context) (*snowflakeMetrics, 
         }
     }
     
-    if c.config.Metrics.TaskHistory {
+    if c.config.Metrics.TaskHistory.Enabled {
         tasks, err := c.queryTaskHistory(ctx)
         if err != nil {
             c.logger.Warn("Failed to query task history", zap.Error(err))
@@ -153,7 +154,7 @@ func (c *snowflakeClient) queryMetrics(ctx context.Context) (*snowflakeMetrics, 
         }
     }
     
-    if c.config.Metrics.ReplicationUsage {
+    if c.config.Metrics.ReplicationUsage.Enabled {
         replication, err := c.queryReplicationUsage(ctx)
         if err != nil {
             c.logger.Warn("Failed to query replication usage", zap.Error(err))
@@ -162,12 +163,104 @@ func (c *snowflakeClient) queryMetrics(ctx context.Context) (*snowflakeMetrics, 
         }
     }
     
-    if c.config.Metrics.AutoClusteringHistory {
+    if c.config.Metrics.AutoClusteringHistory.Enabled {
         clustering, err := c.queryAutoClusteringHistory(ctx)
         if err != nil {
             c.logger.Warn("Failed to query auto-clustering history", zap.Error(err))
         } else {
             metrics.autoClusteringHistory = clustering
+        }
+    }
+    
+    // EVENT TABLES queries (SECONDS-LEVEL LATENCY!)
+    if c.config.EventTables.Enabled {
+        if c.config.EventTables.QueryLogs.Enabled {
+            eventLogs, err := c.queryEventTableLogs(ctx, "QUERY")
+            if err != nil {
+                c.logger.Warn("Failed to query event table query logs", zap.Error(err))
+            } else {
+                metrics.eventQueryLogs = eventLogs
+            }
+        }
+        
+        if c.config.EventTables.TaskLogs.Enabled {
+            eventLogs, err := c.queryEventTableLogs(ctx, "TASK")
+            if err != nil {
+                c.logger.Warn("Failed to query event table task logs", zap.Error(err))
+            } else {
+                metrics.eventTaskLogs = eventLogs
+            }
+        }
+        
+        if c.config.EventTables.FunctionLogs.Enabled {
+            eventLogs, err := c.queryEventTableLogs(ctx, "FUNCTION")
+            if err != nil {
+                c.logger.Warn("Failed to query event table function logs", zap.Error(err))
+            } else {
+                metrics.eventFunctionLogs = eventLogs
+            }
+        }
+        
+        if c.config.EventTables.ProcedureLogs.Enabled {
+            eventLogs, err := c.queryEventTableLogs(ctx, "PROCEDURE")
+            if err != nil {
+                c.logger.Warn("Failed to query event table procedure logs", zap.Error(err))
+            } else {
+                metrics.eventProcedureLogs = eventLogs
+            }
+        }
+    }
+    
+    // ORGANIZATION queries (multi-account)
+    if c.config.Organization.Enabled {
+        if c.config.Organization.OrgCreditUsage.Enabled {
+            orgCredits, err := c.queryOrgCreditUsage(ctx)
+            if err != nil {
+                c.logger.Warn("Failed to query org credit usage", zap.Error(err))
+            } else {
+                metrics.orgCreditUsage = orgCredits
+            }
+        }
+        
+        if c.config.Organization.OrgStorageUsage.Enabled {
+            orgStorage, err := c.queryOrgStorageUsage(ctx)
+            if err != nil {
+                c.logger.Warn("Failed to query org storage usage", zap.Error(err))
+            } else {
+                metrics.orgStorageUsage = orgStorage
+            }
+        }
+        
+        if c.config.Organization.OrgDataTransfer.Enabled {
+            orgTransfer, err := c.queryOrgDataTransfer(ctx)
+            if err != nil {
+                c.logger.Warn("Failed to query org data transfer", zap.Error(err))
+            } else {
+                metrics.orgDataTransfer = orgTransfer
+            }
+        }
+        
+        if c.config.Organization.OrgContractUsage.Enabled {
+            orgContract, err := c.queryOrgContractUsage(ctx)
+            if err != nil {
+                c.logger.Warn("Failed to query org contract usage", zap.Error(err))
+            } else {
+                metrics.orgContractUsage = orgContract
+            }
+        }
+    }
+    
+    // CUSTOM QUERIES
+    if c.config.CustomQueries.Enabled {
+        for _, customQuery := range c.config.CustomQueries.Queries {
+            results, err := c.executeCustomQuery(ctx, customQuery)
+            if err != nil {
+                c.logger.Warn("Failed to execute custom query", 
+                    zap.String("query_name", customQuery.Name),
+                    zap.Error(err))
+            } else {
+                metrics.customQueryResults = append(metrics.customQueryResults, results)
+            }
         }
     }
     
@@ -177,7 +270,6 @@ func (c *snowflakeClient) queryMetrics(ctx context.Context) (*snowflakeMetrics, 
 // ========== INFORMATION_SCHEMA Queries (REAL-TIME!) ==========
 
 func (c *snowflakeClient) queryCurrentQueries(ctx context.Context) ([]currentQueryRow, error) {
-    // Table function for last 5 minutes of queries - REAL TIME!
     query := `
         SELECT 
             WAREHOUSE_NAME,
@@ -220,8 +312,6 @@ func (c *snowflakeClient) queryCurrentQueries(ctx context.Context) ([]currentQue
 }
 
 func (c *snowflakeClient) queryWarehouseLoadHistory(ctx context.Context) ([]warehouseLoadRow, error) {
-    // Warehouse load for last 5 minutes - NEAR REAL TIME
-    // Note: Cannot use parameterized query with table functions, must concatenate
     query := fmt.Sprintf(`
         SELECT 
             WAREHOUSE_NAME,
@@ -473,7 +563,6 @@ func (c *snowflakeClient) queryDatabaseStorage(ctx context.Context) ([]databaseS
 }
 
 func (c *snowflakeClient) queryTaskHistory(ctx context.Context) ([]taskHistoryRow, error) {
-    // Fixed: Use COUNT for execution count, don't use SUM on timestamps
     query := `
         SELECT 
             DATABASE_NAME,
@@ -586,13 +675,252 @@ func (c *snowflakeClient) queryAutoClusteringHistory(ctx context.Context) ([]aut
     return results, rows.Err()
 }
 
+// ========== EVENT TABLES Queries (SECONDS-LEVEL LATENCY!) ==========
+
+func (c *snowflakeClient) queryEventTableLogs(ctx context.Context, eventType string) ([]eventTableRow, error) {
+    // Query event table for logs with CDC (change data capture)
+    // This uses CHANGES clause to get only new events since last query
+    query := fmt.Sprintf(`
+        SELECT 
+            TIMESTAMP,
+            RESOURCE_ATTRIBUTES['snow.database.name']::STRING as DATABASE_NAME,
+            RESOURCE_ATTRIBUTES['snow.schema.name']::STRING as SCHEMA_NAME,
+            RESOURCE_ATTRIBUTES['snow.executable.name']::STRING as OBJECT_NAME,
+            RECORD['severity_text']::STRING as SEVERITY,
+            RECORD['body']::STRING as MESSAGE,
+            RECORD_ATTRIBUTES['snow.query.id']::STRING as QUERY_ID,
+            RECORD_ATTRIBUTES['error.message']::STRING as ERROR_MESSAGE
+        FROM %s
+        WHERE RECORD_TYPE = '%s'
+        AND TIMESTAMP >= DATEADD('seconds', -60, CURRENT_TIMESTAMP())
+        ORDER BY TIMESTAMP DESC
+        LIMIT 1000
+    `, c.config.EventTables.TableName, eventType)
+    
+    rows, err := c.db.QueryContext(ctx, query)
+    if err != nil {
+        return nil, fmt.Errorf("failed to query event table: %w", err)
+    }
+    defer rows.Close()
+    
+    var results []eventTableRow
+    for rows.Next() {
+        var r eventTableRow
+        err := rows.Scan(
+            &r.timestamp,
+            &r.databaseName,
+            &r.schemaName,
+            &r.objectName,
+            &r.severity,
+            &r.message,
+            &r.queryID,
+            &r.errorMessage,
+        )
+        if err != nil {
+            c.logger.Warn("Failed to scan event table row", zap.Error(err))
+            continue
+        }
+        r.eventType = eventType
+        results = append(results, r)
+    }
+    
+    return results, rows.Err()
+}
+
+// ========== ORGANIZATION Queries (Multi-Account) ==========
+
+func (c *snowflakeClient) queryOrgCreditUsage(ctx context.Context) ([]orgCreditUsageRow, error) {
+    query := `
+        SELECT 
+            ORGANIZATION_NAME,
+            ACCOUNT_NAME,
+            SERVICE_TYPE,
+            SUM(CREDITS_USED) as TOTAL_CREDITS
+        FROM SNOWFLAKE.ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY
+        WHERE USAGE_DATE >= DATEADD(day, -1, CURRENT_DATE())
+        GROUP BY ORGANIZATION_NAME, ACCOUNT_NAME, SERVICE_TYPE
+    `
+    
+    rows, err := c.db.QueryContext(ctx, query)
+    if err != nil {
+        return nil, fmt.Errorf("failed to query org credit usage: %w", err)
+    }
+    defer rows.Close()
+    
+    var results []orgCreditUsageRow
+    for rows.Next() {
+        var r orgCreditUsageRow
+        err := rows.Scan(&r.organizationName, &r.accountName, &r.serviceType, &r.totalCredits)
+        if err != nil {
+            c.logger.Warn("Failed to scan org credit usage row", zap.Error(err))
+            continue
+        }
+        results = append(results, r)
+    }
+    
+    return results, rows.Err()
+}
+
+func (c *snowflakeClient) queryOrgStorageUsage(ctx context.Context) ([]orgStorageUsageRow, error) {
+    query := `
+        SELECT 
+            ORGANIZATION_NAME,
+            ACCOUNT_NAME,
+            AVG(STORAGE_BYTES) as AVG_STORAGE_BYTES,
+            AVG(STAGE_BYTES) as AVG_STAGE_BYTES,
+            AVG(FAILSAFE_BYTES) as AVG_FAILSAFE_BYTES
+        FROM SNOWFLAKE.ORGANIZATION_USAGE.STORAGE_DAILY_HISTORY
+        WHERE USAGE_DATE >= DATEADD(day, -1, CURRENT_DATE())
+        GROUP BY ORGANIZATION_NAME, ACCOUNT_NAME
+    `
+    
+    rows, err := c.db.QueryContext(ctx, query)
+    if err != nil {
+        return nil, fmt.Errorf("failed to query org storage usage: %w", err)
+    }
+    defer rows.Close()
+    
+    var results []orgStorageUsageRow
+    for rows.Next() {
+        var r orgStorageUsageRow
+        err := rows.Scan(&r.organizationName, &r.accountName, &r.avgStorageBytes, &r.avgStageBytes, &r.avgFailsafeBytes)
+        if err != nil {
+            c.logger.Warn("Failed to scan org storage usage row", zap.Error(err))
+            continue
+        }
+        results = append(results, r)
+    }
+    
+    return results, rows.Err()
+}
+
+func (c *snowflakeClient) queryOrgDataTransfer(ctx context.Context) ([]orgDataTransferRow, error) {
+    query := `
+        SELECT 
+            ORGANIZATION_NAME,
+            SOURCE_ACCOUNT_NAME,
+            TARGET_ACCOUNT_NAME,
+            SOURCE_REGION,
+            TARGET_REGION,
+            SUM(BYTES_TRANSFERRED) as TOTAL_BYTES_TRANSFERRED
+        FROM SNOWFLAKE.ORGANIZATION_USAGE.DATA_TRANSFER_HISTORY
+        WHERE START_TIME >= DATEADD(day, -1, CURRENT_TIMESTAMP())
+        GROUP BY ORGANIZATION_NAME, SOURCE_ACCOUNT_NAME, TARGET_ACCOUNT_NAME, SOURCE_REGION, TARGET_REGION
+    `
+    
+    rows, err := c.db.QueryContext(ctx, query)
+    if err != nil {
+        return nil, fmt.Errorf("failed to query org data transfer: %w", err)
+    }
+    defer rows.Close()
+    
+    var results []orgDataTransferRow
+    for rows.Next() {
+        var r orgDataTransferRow
+        err := rows.Scan(
+            &r.organizationName,
+            &r.sourceAccountName,
+            &r.targetAccountName,
+            &r.sourceRegion,
+            &r.targetRegion,
+            &r.totalBytesTransferred,
+        )
+        if err != nil {
+            c.logger.Warn("Failed to scan org data transfer row", zap.Error(err))
+            continue
+        }
+        results = append(results, r)
+    }
+    
+    return results, rows.Err()
+}
+
+func (c *snowflakeClient) queryOrgContractUsage(ctx context.Context) ([]orgContractUsageRow, error) {
+    query := `
+        SELECT 
+            ORGANIZATION_NAME,
+            CONTRACT_NUMBER,
+            SUM(CREDITS_USED) as TOTAL_CREDITS_USED,
+            MAX(CREDITS_BILLED) as TOTAL_CREDITS_BILLED,
+            MAX(CREDITS_ADJUSTMENT_CLOUD_SERVICES) as CLOUD_SERVICES_ADJUSTMENT
+        FROM SNOWFLAKE.ORGANIZATION_USAGE.CONTRACT_ITEMS
+        WHERE USAGE_DATE >= DATEADD(day, -7, CURRENT_DATE())
+        GROUP BY ORGANIZATION_NAME, CONTRACT_NUMBER
+    `
+    
+    rows, err := c.db.QueryContext(ctx, query)
+    if err != nil {
+        return nil, fmt.Errorf("failed to query org contract usage: %w", err)
+    }
+    defer rows.Close()
+    
+    var results []orgContractUsageRow
+    for rows.Next() {
+        var r orgContractUsageRow
+        err := rows.Scan(
+            &r.organizationName,
+            &r.contractNumber,
+            &r.totalCreditsUsed,
+            &r.totalCreditsBilled,
+            &r.cloudServicesAdjustment,
+        )
+        if err != nil {
+            c.logger.Warn("Failed to scan org contract usage row", zap.Error(err))
+            continue
+        }
+        results = append(results, r)
+    }
+    
+    return results, rows.Err()
+}
+
+// ========== CUSTOM QUERIES ==========
+
+func (c *snowflakeClient) executeCustomQuery(ctx context.Context, query CustomQuery) (customQueryResult, error) {
+    rows, err := c.db.QueryContext(ctx, query.SQL)
+    if err != nil {
+        return customQueryResult{}, fmt.Errorf("failed to execute custom query %s: %w", query.Name, err)
+    }
+    defer rows.Close()
+    
+    columns, err := rows.Columns()
+    if err != nil {
+        return customQueryResult{}, fmt.Errorf("failed to get columns: %w", err)
+    }
+    
+    result := customQueryResult{
+        name:       query.Name,
+        metricType: query.MetricType,
+        rows:       []map[string]interface{}{},
+    }
+    
+    for rows.Next() {
+        values := make([]interface{}, len(columns))
+        valuePtrs := make([]interface{}, len(columns))
+        for i := range values {
+            valuePtrs[i] = &values[i]
+        }
+        
+        if err := rows.Scan(valuePtrs...); err != nil {
+            c.logger.Warn("Failed to scan custom query row", zap.Error(err))
+            continue
+        }
+        
+        row := make(map[string]interface{})
+        for i, col := range columns {
+            row[col] = values[i]
+        }
+        result.rows = append(result.rows, row)
+    }
+    
+    return result, rows.Err()
+}
+
 // Data structures
 type snowflakeMetrics struct {
-    // INFORMATION_SCHEMA (real-time)
-    currentQueries []currentQueryRow
-    warehouseLoad  []warehouseLoadRow
-    
-    // ACCOUNT_USAGE (historical)
+    // Standard metrics
+    currentQueries        []currentQueryRow
+    warehouseLoad         []warehouseLoadRow
     queryStats            []queryStatRow
     creditUsage           []creditUsageRow
     storageUsage          []storageUsageRow
@@ -602,9 +930,24 @@ type snowflakeMetrics struct {
     taskHistory           []taskHistoryRow
     replicationUsage      []replicationUsageRow
     autoClusteringHistory []autoClusteringRow
+    
+    // Event Tables (REAL-TIME!)
+    eventQueryLogs     []eventTableRow
+    eventTaskLogs      []eventTableRow
+    eventFunctionLogs  []eventTableRow
+    eventProcedureLogs []eventTableRow
+    
+    // Organization metrics
+    orgCreditUsage   []orgCreditUsageRow
+    orgStorageUsage  []orgStorageUsageRow
+    orgDataTransfer  []orgDataTransferRow
+    orgContractUsage []orgContractUsageRow
+    
+    // Custom queries
+    customQueryResults []customQueryResult
 }
 
-// INFORMATION_SCHEMA row types
+// Existing row types
 type currentQueryRow struct {
     warehouseName    sql.NullString
     queryType        sql.NullString
@@ -622,7 +965,6 @@ type warehouseLoadRow struct {
     avgBlocked            sql.NullFloat64
 }
 
-// ACCOUNT_USAGE row types
 type queryStatRow struct {
     warehouseName      sql.NullString
     queryType          sql.NullString
@@ -670,25 +1012,76 @@ type databaseStorageRow struct {
 }
 
 type taskHistoryRow struct {
-    databaseName      sql.NullString
-    schemaName        sql.NullString
-    taskName          sql.NullString
-    state             sql.NullString
-    executionCount    int64
-    avgScheduledTime  sql.NullFloat64
+    databaseName     sql.NullString
+    schemaName       sql.NullString
+    taskName         sql.NullString
+    state            sql.NullString
+    executionCount   int64
+    avgScheduledTime sql.NullFloat64
 }
 
 type replicationUsageRow struct {
-    databaseName      sql.NullString
-    totalCredits      float64
-    bytesTransferred  sql.NullFloat64
+    databaseName     sql.NullString
+    totalCredits     float64
+    bytesTransferred sql.NullFloat64
 }
 
 type autoClusteringRow struct {
-    databaseName      sql.NullString
-    schemaName        sql.NullString
-    tableName         sql.NullString
-    totalCredits      float64
-    bytesReclustered  sql.NullFloat64
-    rowsReclustered   sql.NullFloat64
+    databaseName     sql.NullString
+    schemaName       sql.NullString
+    tableName        sql.NullString
+    totalCredits     float64
+    bytesReclustered sql.NullFloat64
+    rowsReclustered  sql.NullFloat64
+}
+
+// New row types for advanced features
+type eventTableRow struct {
+    timestamp    time.Time
+    eventType    string
+    databaseName sql.NullString
+    schemaName   sql.NullString
+    objectName   sql.NullString
+    severity     sql.NullString
+    message      sql.NullString
+    queryID      sql.NullString
+    errorMessage sql.NullString
+}
+
+type orgCreditUsageRow struct {
+    organizationName sql.NullString
+    accountName      sql.NullString
+    serviceType      sql.NullString
+    totalCredits     float64
+}
+
+type orgStorageUsageRow struct {
+    organizationName sql.NullString
+    accountName      sql.NullString
+    avgStorageBytes  sql.NullFloat64
+    avgStageBytes    sql.NullFloat64
+    avgFailsafeBytes sql.NullFloat64
+}
+
+type orgDataTransferRow struct {
+    organizationName      sql.NullString
+    sourceAccountName     sql.NullString
+    targetAccountName     sql.NullString
+    sourceRegion          sql.NullString
+    targetRegion          sql.NullString
+    totalBytesTransferred sql.NullFloat64
+}
+
+type orgContractUsageRow struct {
+    organizationName        sql.NullString
+    contractNumber          sql.NullInt64
+    totalCreditsUsed        float64
+    totalCreditsBilled      sql.NullFloat64
+    cloudServicesAdjustment sql.NullFloat64
+}
+
+type customQueryResult struct {
+    name       string
+    metricType string
+    rows       []map[string]interface{}
 }

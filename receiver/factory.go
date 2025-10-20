@@ -35,7 +35,8 @@ func createMetricsReceiver(
     
     snowflakeCfg := cfg.(*Config)
     
-    interval := snowflakeCfg.GetCollectionInterval()
+    // Use the shortest interval as base scrape interval
+    interval := snowflakeCfg.GetBaseInterval()
     
     s, err := newSnowflakeScraper(settings, snowflakeCfg)
     if err != nil {

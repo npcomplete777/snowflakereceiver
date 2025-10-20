@@ -2,6 +2,8 @@ package snowflakereceiver
 
 import (
     "context"
+    "fmt"
+    "strconv"
     "time"
     
     "go.opentelemetry.io/collector/pdata/pcommon"
@@ -11,9 +13,10 @@ import (
 )
 
 type snowflakeScraper struct {
-    logger *zap.Logger
-    config *Config
-    client *snowflakeClient
+    logger  *zap.Logger
+    config  *Config
+    client  *snowflakeClient
+    lastRun map[string]time.Time
 }
 
 func newSnowflakeScraper(settings receiver.Settings, config *Config) (*snowflakeScraper, error) {
@@ -23,10 +26,23 @@ func newSnowflakeScraper(settings receiver.Settings, config *Config) (*snowflake
     }
     
     return &snowflakeScraper{
-        logger: settings.Logger,
-        config: config,
-        client: client,
+        logger:  settings.Logger,
+        config:  config,
+        client:  client,
+        lastRun: make(map[string]time.Time),
     }, nil
+}
+
+func (s *snowflakeScraper) shouldScrape(metricName string, interval time.Duration) bool {
+    lastRun, exists := s.lastRun[metricName]
+    if !exists {
+        return true
+    }
+    return time.Since(lastRun) >= interval
+}
+
+func (s *snowflakeScraper) markScraped(metricName string) {
+    s.lastRun[metricName] = time.Now()
 }
 
 func (s *snowflakeScraper) scrape(ctx context.Context) (pmetric.Metrics, error) {
@@ -48,7 +64,6 @@ func (s *snowflakeScraper) buildMetrics(metrics *snowflakeMetrics) pmetric.Metri
     md := pmetric.NewMetrics()
     resourceMetrics := md.ResourceMetrics().AppendEmpty()
     
-    // Add resource attributes
     resourceAttrs := resourceMetrics.Resource().Attributes()
     resourceAttrs.PutStr("snowflake.account.name", s.config.Account)
     resourceAttrs.PutStr("snowflake.warehouse.name", s.config.Warehouse)
@@ -57,50 +72,170 @@ func (s *snowflakeScraper) buildMetrics(metrics *snowflakeMetrics) pmetric.Metri
     scopeMetrics := resourceMetrics.ScopeMetrics().AppendEmpty()
     now := pcommon.NewTimestampFromTime(time.Now())
     
-    // INFORMATION_SCHEMA metrics (REAL-TIME!)
-    if s.config.Metrics.CurrentQueries && len(metrics.currentQueries) > 0 {
-        s.addCurrentQueryMetrics(scopeMetrics, metrics.currentQueries, now)
+    // Standard metrics with per-metric intervals
+    if s.config.Metrics.CurrentQueries.Enabled && len(metrics.currentQueries) > 0 {
+        interval := s.config.Metrics.CurrentQueries.GetInterval(1 * time.Minute)
+        if s.shouldScrape("current_queries", interval) {
+            s.addCurrentQueryMetrics(scopeMetrics, metrics.currentQueries, now)
+            s.markScraped("current_queries")
+        }
     }
     
-    if s.config.Metrics.WarehouseLoad && len(metrics.warehouseLoad) > 0 {
-        s.addWarehouseLoadMetrics(scopeMetrics, metrics.warehouseLoad, now)
+    if s.config.Metrics.WarehouseLoad.Enabled && len(metrics.warehouseLoad) > 0 {
+        interval := s.config.Metrics.WarehouseLoad.GetInterval(1 * time.Minute)
+        if s.shouldScrape("warehouse_load", interval) {
+            s.addWarehouseLoadMetrics(scopeMetrics, metrics.warehouseLoad, now)
+            s.markScraped("warehouse_load")
+        }
     }
     
-    // ACCOUNT_USAGE metrics (Historical)
-    if s.config.Metrics.QueryHistory && len(metrics.queryStats) > 0 {
-        s.addQueryMetrics(scopeMetrics, metrics.queryStats, now)
+    if s.config.Metrics.QueryHistory.Enabled && len(metrics.queryStats) > 0 {
+        interval := s.config.Metrics.QueryHistory.GetInterval(5 * time.Minute)
+        if s.shouldScrape("query_history", interval) {
+            s.addQueryMetrics(scopeMetrics, metrics.queryStats, now)
+            s.markScraped("query_history")
+        }
     }
     
-    if s.config.Metrics.CreditUsage && len(metrics.creditUsage) > 0 {
-        s.addCreditMetrics(scopeMetrics, metrics.creditUsage, now)
+    if s.config.Metrics.CreditUsage.Enabled && len(metrics.creditUsage) > 0 {
+        interval := s.config.Metrics.CreditUsage.GetInterval(5 * time.Minute)
+        if s.shouldScrape("credit_usage", interval) {
+            s.addCreditMetrics(scopeMetrics, metrics.creditUsage, now)
+            s.markScraped("credit_usage")
+        }
     }
     
-    if s.config.Metrics.StorageMetrics && len(metrics.storageUsage) > 0 {
-        s.addStorageMetrics(scopeMetrics, metrics.storageUsage, now)
+    if s.config.Metrics.StorageMetrics.Enabled && len(metrics.storageUsage) > 0 {
+        interval := s.config.Metrics.StorageMetrics.GetInterval(30 * time.Minute)
+        if s.shouldScrape("storage_metrics", interval) {
+            s.addStorageMetrics(scopeMetrics, metrics.storageUsage, now)
+            s.markScraped("storage_metrics")
+        }
     }
     
-    if s.config.Metrics.LoginHistory && len(metrics.loginHistory) > 0 {
-        s.addLoginMetrics(scopeMetrics, metrics.loginHistory, now)
+    if s.config.Metrics.LoginHistory.Enabled && len(metrics.loginHistory) > 0 {
+        interval := s.config.Metrics.LoginHistory.GetInterval(10 * time.Minute)
+        if s.shouldScrape("login_history", interval) {
+            s.addLoginMetrics(scopeMetrics, metrics.loginHistory, now)
+            s.markScraped("login_history")
+        }
     }
     
-    if s.config.Metrics.DataPipeline && len(metrics.pipeUsage) > 0 {
-        s.addPipeMetrics(scopeMetrics, metrics.pipeUsage, now)
+    if s.config.Metrics.DataPipeline.Enabled && len(metrics.pipeUsage) > 0 {
+        interval := s.config.Metrics.DataPipeline.GetInterval(10 * time.Minute)
+        if s.shouldScrape("data_pipeline", interval) {
+            s.addPipeMetrics(scopeMetrics, metrics.pipeUsage, now)
+            s.markScraped("data_pipeline")
+        }
     }
     
-    if s.config.Metrics.DatabaseStorage && len(metrics.databaseStorage) > 0 {
-        s.addDatabaseStorageMetrics(scopeMetrics, metrics.databaseStorage, now)
+    if s.config.Metrics.DatabaseStorage.Enabled && len(metrics.databaseStorage) > 0 {
+        interval := s.config.Metrics.DatabaseStorage.GetInterval(30 * time.Minute)
+        if s.shouldScrape("database_storage", interval) {
+            s.addDatabaseStorageMetrics(scopeMetrics, metrics.databaseStorage, now)
+            s.markScraped("database_storage")
+        }
     }
     
-    if s.config.Metrics.TaskHistory && len(metrics.taskHistory) > 0 {
-        s.addTaskHistoryMetrics(scopeMetrics, metrics.taskHistory, now)
+    if s.config.Metrics.TaskHistory.Enabled && len(metrics.taskHistory) > 0 {
+        interval := s.config.Metrics.TaskHistory.GetInterval(10 * time.Minute)
+        if s.shouldScrape("task_history", interval) {
+            s.addTaskHistoryMetrics(scopeMetrics, metrics.taskHistory, now)
+            s.markScraped("task_history")
+        }
     }
     
-    if s.config.Metrics.ReplicationUsage && len(metrics.replicationUsage) > 0 {
-        s.addReplicationMetrics(scopeMetrics, metrics.replicationUsage, now)
+    if s.config.Metrics.ReplicationUsage.Enabled && len(metrics.replicationUsage) > 0 {
+        interval := s.config.Metrics.ReplicationUsage.GetInterval(15 * time.Minute)
+        if s.shouldScrape("replication_usage", interval) {
+            s.addReplicationMetrics(scopeMetrics, metrics.replicationUsage, now)
+            s.markScraped("replication_usage")
+        }
     }
     
-    if s.config.Metrics.AutoClusteringHistory && len(metrics.autoClusteringHistory) > 0 {
-        s.addAutoClusteringMetrics(scopeMetrics, metrics.autoClusteringHistory, now)
+    if s.config.Metrics.AutoClusteringHistory.Enabled && len(metrics.autoClusteringHistory) > 0 {
+        interval := s.config.Metrics.AutoClusteringHistory.GetInterval(15 * time.Minute)
+        if s.shouldScrape("auto_clustering_history", interval) {
+            s.addAutoClusteringMetrics(scopeMetrics, metrics.autoClusteringHistory, now)
+            s.markScraped("auto_clustering_history")
+        }
+    }
+    
+    // EVENT TABLES - REAL-TIME (seconds latency!)
+    if s.config.EventTables.Enabled {
+        if s.config.EventTables.QueryLogs.Enabled && len(metrics.eventQueryLogs) > 0 {
+            interval := s.config.EventTables.QueryLogs.GetInterval(30 * time.Second)
+            if s.shouldScrape("event_query_logs", interval) {
+                s.addEventTableMetrics(scopeMetrics, metrics.eventQueryLogs, now)
+                s.markScraped("event_query_logs")
+            }
+        }
+        
+        if s.config.EventTables.TaskLogs.Enabled && len(metrics.eventTaskLogs) > 0 {
+            interval := s.config.EventTables.TaskLogs.GetInterval(30 * time.Second)
+            if s.shouldScrape("event_task_logs", interval) {
+                s.addEventTableMetrics(scopeMetrics, metrics.eventTaskLogs, now)
+                s.markScraped("event_task_logs")
+            }
+        }
+        
+        if s.config.EventTables.FunctionLogs.Enabled && len(metrics.eventFunctionLogs) > 0 {
+            interval := s.config.EventTables.FunctionLogs.GetInterval(30 * time.Second)
+            if s.shouldScrape("event_function_logs", interval) {
+                s.addEventTableMetrics(scopeMetrics, metrics.eventFunctionLogs, now)
+                s.markScraped("event_function_logs")
+            }
+        }
+        
+        if s.config.EventTables.ProcedureLogs.Enabled && len(metrics.eventProcedureLogs) > 0 {
+            interval := s.config.EventTables.ProcedureLogs.GetInterval(30 * time.Second)
+            if s.shouldScrape("event_procedure_logs", interval) {
+                s.addEventTableMetrics(scopeMetrics, metrics.eventProcedureLogs, now)
+                s.markScraped("event_procedure_logs")
+            }
+        }
+    }
+    
+    // ORGANIZATION METRICS
+    if s.config.Organization.Enabled {
+        if s.config.Organization.OrgCreditUsage.Enabled && len(metrics.orgCreditUsage) > 0 {
+            interval := s.config.Organization.OrgCreditUsage.GetInterval(1 * time.Hour)
+            if s.shouldScrape("org_credit_usage", interval) {
+                s.addOrgCreditMetrics(scopeMetrics, metrics.orgCreditUsage, now)
+                s.markScraped("org_credit_usage")
+            }
+        }
+        
+        if s.config.Organization.OrgStorageUsage.Enabled && len(metrics.orgStorageUsage) > 0 {
+            interval := s.config.Organization.OrgStorageUsage.GetInterval(1 * time.Hour)
+            if s.shouldScrape("org_storage_usage", interval) {
+                s.addOrgStorageMetrics(scopeMetrics, metrics.orgStorageUsage, now)
+                s.markScraped("org_storage_usage")
+            }
+        }
+        
+        if s.config.Organization.OrgDataTransfer.Enabled && len(metrics.orgDataTransfer) > 0 {
+            interval := s.config.Organization.OrgDataTransfer.GetInterval(1 * time.Hour)
+            if s.shouldScrape("org_data_transfer", interval) {
+                s.addOrgDataTransferMetrics(scopeMetrics, metrics.orgDataTransfer, now)
+                s.markScraped("org_data_transfer")
+            }
+        }
+        
+        if s.config.Organization.OrgContractUsage.Enabled && len(metrics.orgContractUsage) > 0 {
+            interval := s.config.Organization.OrgContractUsage.GetInterval(12 * time.Hour)
+            if s.shouldScrape("org_contract_usage", interval) {
+                s.addOrgContractMetrics(scopeMetrics, metrics.orgContractUsage, now)
+                s.markScraped("org_contract_usage")
+            }
+        }
+    }
+    
+    // CUSTOM QUERIES
+    if s.config.CustomQueries.Enabled && len(metrics.customQueryResults) > 0 {
+        for _, result := range metrics.customQueryResults {
+            s.addCustomQueryMetrics(scopeMetrics, result, now)
+        }
     }
     
     return md
@@ -110,7 +245,6 @@ func (s *snowflakeScraper) buildMetrics(metrics *snowflakeMetrics) pmetric.Metri
 
 func (s *snowflakeScraper) addCurrentQueryMetrics(scopeMetrics pmetric.ScopeMetrics, queries []currentQueryRow, now pcommon.Timestamp) {
     for _, query := range queries {
-        // Real-time query count
         metric := scopeMetrics.Metrics().AppendEmpty()
         metric.SetName("snowflake.current_queries.count")
         metric.SetDescription("Current query count (last 5 minutes, REAL-TIME)")
@@ -130,7 +264,6 @@ func (s *snowflakeScraper) addCurrentQueryMetrics(scopeMetrics pmetric.ScopeMetr
         }
         dp.Attributes().PutStr("data_source", "INFORMATION_SCHEMA")
         
-        // Real-time execution time
         if query.avgExecutionTime.Valid {
             execMetric := scopeMetrics.Metrics().AppendEmpty()
             execMetric.SetName("snowflake.current_queries.execution_time")
@@ -149,7 +282,6 @@ func (s *snowflakeScraper) addCurrentQueryMetrics(scopeMetrics pmetric.ScopeMetr
             execDp.Attributes().PutStr("data_source", "INFORMATION_SCHEMA")
         }
         
-        // Real-time bytes scanned
         if query.avgBytesScanned.Valid {
             bytesMetric := scopeMetrics.Metrics().AppendEmpty()
             bytesMetric.SetName("snowflake.current_queries.bytes_scanned")
@@ -172,7 +304,6 @@ func (s *snowflakeScraper) addCurrentQueryMetrics(scopeMetrics pmetric.ScopeMetr
 
 func (s *snowflakeScraper) addWarehouseLoadMetrics(scopeMetrics pmetric.ScopeMetrics, loads []warehouseLoadRow, now pcommon.Timestamp) {
     for _, load := range loads {
-        // Running queries
         if load.avgRunning.Valid {
             metric := scopeMetrics.Metrics().AppendEmpty()
             metric.SetName("snowflake.warehouse.queries_running")
@@ -188,7 +319,6 @@ func (s *snowflakeScraper) addWarehouseLoadMetrics(scopeMetrics pmetric.ScopeMet
             dp.Attributes().PutStr("data_source", "INFORMATION_SCHEMA")
         }
         
-        // Queued for overload
         if load.avgQueuedLoad.Valid {
             queuedMetric := scopeMetrics.Metrics().AppendEmpty()
             queuedMetric.SetName("snowflake.warehouse.queries_queued_overload")
@@ -204,7 +334,6 @@ func (s *snowflakeScraper) addWarehouseLoadMetrics(scopeMetrics pmetric.ScopeMet
             queuedDp.Attributes().PutStr("data_source", "INFORMATION_SCHEMA")
         }
         
-        // Queued for provisioning
         if load.avgQueuedProvisioning.Valid {
             provMetric := scopeMetrics.Metrics().AppendEmpty()
             provMetric.SetName("snowflake.warehouse.queries_queued_provisioning")
@@ -220,7 +349,6 @@ func (s *snowflakeScraper) addWarehouseLoadMetrics(scopeMetrics pmetric.ScopeMet
             provDp.Attributes().PutStr("data_source", "INFORMATION_SCHEMA")
         }
         
-        // Blocked queries
         if load.avgBlocked.Valid {
             blockedMetric := scopeMetrics.Metrics().AppendEmpty()
             blockedMetric.SetName("snowflake.warehouse.queries_blocked")
@@ -238,11 +366,10 @@ func (s *snowflakeScraper) addWarehouseLoadMetrics(scopeMetrics pmetric.ScopeMet
     }
 }
 
-// ========== ACCOUNT_USAGE Metrics (Historical - 45min-3hr latency) ==========
+// ========== ACCOUNT_USAGE Metrics (Historical) ==========
 
 func (s *snowflakeScraper) addQueryMetrics(scopeMetrics pmetric.ScopeMetrics, stats []queryStatRow, now pcommon.Timestamp) {
     for _, stat := range stats {
-        // Query count
         metric := scopeMetrics.Metrics().AppendEmpty()
         metric.SetName("snowflake.query.count")
         metric.SetDescription("Number of queries executed (Historical)")
@@ -262,7 +389,6 @@ func (s *snowflakeScraper) addQueryMetrics(scopeMetrics pmetric.ScopeMetrics, st
         }
         dp.Attributes().PutStr("data_source", "ACCOUNT_USAGE")
         
-        // Execution time
         if stat.avgExecutionTime.Valid {
             execMetric := scopeMetrics.Metrics().AppendEmpty()
             execMetric.SetName("snowflake.query.execution_time")
@@ -281,7 +407,6 @@ func (s *snowflakeScraper) addQueryMetrics(scopeMetrics pmetric.ScopeMetrics, st
             execDp.Attributes().PutStr("data_source", "ACCOUNT_USAGE")
         }
         
-        // Bytes scanned
         if stat.avgBytesScanned.Valid {
             bytesMetric := scopeMetrics.Metrics().AppendEmpty()
             bytesMetric.SetName("snowflake.query.bytes_scanned")
@@ -300,7 +425,6 @@ func (s *snowflakeScraper) addQueryMetrics(scopeMetrics pmetric.ScopeMetrics, st
             bytesDp.Attributes().PutStr("data_source", "ACCOUNT_USAGE")
         }
         
-        // Bytes written
         if stat.avgBytesWritten.Valid {
             writtenMetric := scopeMetrics.Metrics().AppendEmpty()
             writtenMetric.SetName("snowflake.query.bytes_written")
@@ -319,7 +443,6 @@ func (s *snowflakeScraper) addQueryMetrics(scopeMetrics pmetric.ScopeMetrics, st
             writtenDp.Attributes().PutStr("data_source", "ACCOUNT_USAGE")
         }
         
-        // Rows produced
         if stat.avgRowsProduced.Valid {
             rowsMetric := scopeMetrics.Metrics().AppendEmpty()
             rowsMetric.SetName("snowflake.query.rows_produced")
@@ -338,7 +461,6 @@ func (s *snowflakeScraper) addQueryMetrics(scopeMetrics pmetric.ScopeMetrics, st
             rowsDp.Attributes().PutStr("data_source", "ACCOUNT_USAGE")
         }
         
-        // Compilation time
         if stat.avgCompilationTime.Valid {
             compMetric := scopeMetrics.Metrics().AppendEmpty()
             compMetric.SetName("snowflake.query.compilation_time")
@@ -361,7 +483,6 @@ func (s *snowflakeScraper) addQueryMetrics(scopeMetrics pmetric.ScopeMetrics, st
 
 func (s *snowflakeScraper) addCreditMetrics(scopeMetrics pmetric.ScopeMetrics, credits []creditUsageRow, now pcommon.Timestamp) {
     for _, credit := range credits {
-        // Total credits
         metric := scopeMetrics.Metrics().AppendEmpty()
         metric.SetName("snowflake.warehouse.credit_usage")
         metric.SetDescription("Warehouse credit usage")
@@ -375,7 +496,6 @@ func (s *snowflakeScraper) addCreditMetrics(scopeMetrics pmetric.ScopeMetrics, c
         }
         dp.Attributes().PutStr("data_source", "ACCOUNT_USAGE")
         
-        // Compute credits
         if credit.computeCredits.Valid {
             compMetric := scopeMetrics.Metrics().AppendEmpty()
             compMetric.SetName("snowflake.warehouse.credit_usage.compute")
@@ -391,7 +511,6 @@ func (s *snowflakeScraper) addCreditMetrics(scopeMetrics pmetric.ScopeMetrics, c
             compDp.Attributes().PutStr("data_source", "ACCOUNT_USAGE")
         }
         
-        // Cloud service credits
         if credit.cloudServiceCredits.Valid {
             cloudMetric := scopeMetrics.Metrics().AppendEmpty()
             cloudMetric.SetName("snowflake.warehouse.credit_usage.cloud_services")
@@ -411,7 +530,6 @@ func (s *snowflakeScraper) addCreditMetrics(scopeMetrics pmetric.ScopeMetrics, c
 
 func (s *snowflakeScraper) addStorageMetrics(scopeMetrics pmetric.ScopeMetrics, storage []storageUsageRow, now pcommon.Timestamp) {
     for _, st := range storage {
-        // Total storage
         if st.totalStorageBytes.Valid {
             metric := scopeMetrics.Metrics().AppendEmpty()
             metric.SetName("snowflake.storage.total")
@@ -424,7 +542,6 @@ func (s *snowflakeScraper) addStorageMetrics(scopeMetrics pmetric.ScopeMetrics, 
             dp.Attributes().PutStr("data_source", "ACCOUNT_USAGE")
         }
         
-        // Stage bytes
         if st.stageBytes.Valid {
             stageMetric := scopeMetrics.Metrics().AppendEmpty()
             stageMetric.SetName("snowflake.storage.stage")
@@ -437,7 +554,6 @@ func (s *snowflakeScraper) addStorageMetrics(scopeMetrics pmetric.ScopeMetrics, 
             stageDp.Attributes().PutStr("data_source", "ACCOUNT_USAGE")
         }
         
-        // Failsafe bytes
         if st.failsafeBytes.Valid {
             failsafeMetric := scopeMetrics.Metrics().AppendEmpty()
             failsafeMetric.SetName("snowflake.storage.failsafe")
@@ -472,7 +588,6 @@ func (s *snowflakeScraper) addLoginMetrics(scopeMetrics pmetric.ScopeMetrics, lo
 
 func (s *snowflakeScraper) addPipeMetrics(scopeMetrics pmetric.ScopeMetrics, pipes []pipeUsageRow, now pcommon.Timestamp) {
     for _, pipe := range pipes {
-        // Pipe credits
         metric := scopeMetrics.Metrics().AppendEmpty()
         metric.SetName("snowflake.pipe.credit_usage")
         metric.SetDescription("Snowpipe credit usage")
@@ -486,7 +601,6 @@ func (s *snowflakeScraper) addPipeMetrics(scopeMetrics pmetric.ScopeMetrics, pip
         }
         dp.Attributes().PutStr("data_source", "ACCOUNT_USAGE")
         
-        // Bytes inserted
         if pipe.bytesInserted.Valid {
             bytesMetric := scopeMetrics.Metrics().AppendEmpty()
             bytesMetric.SetName("snowflake.pipe.bytes_inserted")
@@ -502,7 +616,6 @@ func (s *snowflakeScraper) addPipeMetrics(scopeMetrics pmetric.ScopeMetrics, pip
             bytesDp.Attributes().PutStr("data_source", "ACCOUNT_USAGE")
         }
         
-        // Files inserted
         if pipe.filesInserted.Valid {
             filesMetric := scopeMetrics.Metrics().AppendEmpty()
             filesMetric.SetName("snowflake.pipe.files_inserted")
@@ -522,7 +635,6 @@ func (s *snowflakeScraper) addPipeMetrics(scopeMetrics pmetric.ScopeMetrics, pip
 
 func (s *snowflakeScraper) addDatabaseStorageMetrics(scopeMetrics pmetric.ScopeMetrics, dbStorage []databaseStorageRow, now pcommon.Timestamp) {
     for _, db := range dbStorage {
-        // Database storage
         if db.avgDatabaseBytes.Valid {
             metric := scopeMetrics.Metrics().AppendEmpty()
             metric.SetName("snowflake.database.storage")
@@ -538,7 +650,6 @@ func (s *snowflakeScraper) addDatabaseStorageMetrics(scopeMetrics pmetric.ScopeM
             dp.Attributes().PutStr("data_source", "ACCOUNT_USAGE")
         }
         
-        // Database failsafe
         if db.avgFailsafeBytes.Valid {
             failsafeMetric := scopeMetrics.Metrics().AppendEmpty()
             failsafeMetric.SetName("snowflake.database.failsafe")
@@ -558,7 +669,6 @@ func (s *snowflakeScraper) addDatabaseStorageMetrics(scopeMetrics pmetric.ScopeM
 
 func (s *snowflakeScraper) addTaskHistoryMetrics(scopeMetrics pmetric.ScopeMetrics, tasks []taskHistoryRow, now pcommon.Timestamp) {
     for _, task := range tasks {
-        // Task execution count
         metric := scopeMetrics.Metrics().AppendEmpty()
         metric.SetName("snowflake.task.execution_count")
         metric.SetDescription("Number of task executions")
@@ -581,7 +691,6 @@ func (s *snowflakeScraper) addTaskHistoryMetrics(scopeMetrics pmetric.ScopeMetri
         }
         dp.Attributes().PutStr("data_source", "ACCOUNT_USAGE")
         
-        // Average scheduled time
         if task.avgScheduledTime.Valid {
             schedMetric := scopeMetrics.Metrics().AppendEmpty()
             schedMetric.SetName("snowflake.task.scheduled_time")
@@ -607,7 +716,6 @@ func (s *snowflakeScraper) addTaskHistoryMetrics(scopeMetrics pmetric.ScopeMetri
 
 func (s *snowflakeScraper) addReplicationMetrics(scopeMetrics pmetric.ScopeMetrics, replications []replicationUsageRow, now pcommon.Timestamp) {
     for _, repl := range replications {
-        // Replication credits
         metric := scopeMetrics.Metrics().AppendEmpty()
         metric.SetName("snowflake.replication.credit_usage")
         metric.SetDescription("Database replication credit usage")
@@ -621,7 +729,6 @@ func (s *snowflakeScraper) addReplicationMetrics(scopeMetrics pmetric.ScopeMetri
         }
         dp.Attributes().PutStr("data_source", "ACCOUNT_USAGE")
         
-        // Bytes transferred
         if repl.bytesTransferred.Valid {
             bytesMetric := scopeMetrics.Metrics().AppendEmpty()
             bytesMetric.SetName("snowflake.replication.bytes_transferred")
@@ -641,7 +748,6 @@ func (s *snowflakeScraper) addReplicationMetrics(scopeMetrics pmetric.ScopeMetri
 
 func (s *snowflakeScraper) addAutoClusteringMetrics(scopeMetrics pmetric.ScopeMetrics, clusterings []autoClusteringRow, now pcommon.Timestamp) {
     for _, cluster := range clusterings {
-        // Auto-clustering credits
         metric := scopeMetrics.Metrics().AppendEmpty()
         metric.SetName("snowflake.auto_clustering.credit_usage")
         metric.SetDescription("Auto-clustering credit usage")
@@ -661,7 +767,6 @@ func (s *snowflakeScraper) addAutoClusteringMetrics(scopeMetrics pmetric.ScopeMe
         }
         dp.Attributes().PutStr("data_source", "ACCOUNT_USAGE")
         
-        // Bytes reclustered
         if cluster.bytesReclustered.Valid {
             bytesMetric := scopeMetrics.Metrics().AppendEmpty()
             bytesMetric.SetName("snowflake.auto_clustering.bytes_reclustered")
@@ -683,7 +788,6 @@ func (s *snowflakeScraper) addAutoClusteringMetrics(scopeMetrics pmetric.ScopeMe
             bytesDp.Attributes().PutStr("data_source", "ACCOUNT_USAGE")
         }
         
-        // Rows reclustered
         if cluster.rowsReclustered.Valid {
             rowsMetric := scopeMetrics.Metrics().AppendEmpty()
             rowsMetric.SetName("snowflake.auto_clustering.rows_reclustered")
@@ -704,5 +808,300 @@ func (s *snowflakeScraper) addAutoClusteringMetrics(scopeMetrics pmetric.ScopeMe
             }
             rowsDp.Attributes().PutStr("data_source", "ACCOUNT_USAGE")
         }
+    }
+}
+
+// ========== EVENT TABLES Metrics (SECONDS-LEVEL LATENCY!) ==========
+
+func (s *snowflakeScraper) addEventTableMetrics(scopeMetrics pmetric.ScopeMetrics, events []eventTableRow, now pcommon.Timestamp) {
+    eventCounts := make(map[string]map[string]int64)
+    
+    for _, event := range events {
+        if _, exists := eventCounts[event.eventType]; !exists {
+            eventCounts[event.eventType] = make(map[string]int64)
+        }
+        
+        severity := "INFO"
+        if event.severity.Valid {
+            severity = event.severity.String
+        }
+        eventCounts[event.eventType][severity]++
+    }
+    
+    for eventType, severityCounts := range eventCounts {
+        for severity, count := range severityCounts {
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName(fmt.Sprintf("snowflake.event.%s.count", eventType))
+            metric.SetDescription(fmt.Sprintf("Event table %s event count (REAL-TIME)", eventType))
+            metric.SetUnit("{events}")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetIntValue(count)
+            dp.Attributes().PutStr("event_type", eventType)
+            dp.Attributes().PutStr("severity", severity)
+            dp.Attributes().PutStr("data_source", "EVENT_TABLE")
+        }
+    }
+    
+    errorCount := int64(0)
+    for _, event := range events {
+        if event.errorMessage.Valid && event.errorMessage.String != "" {
+            errorCount++
+        }
+    }
+    
+    if errorCount > 0 {
+        errorMetric := scopeMetrics.Metrics().AppendEmpty()
+        errorMetric.SetName("snowflake.event.errors.count")
+        errorMetric.SetDescription("Event table error count (REAL-TIME)")
+        errorMetric.SetUnit("{errors}")
+        gauge := errorMetric.SetEmptyGauge()
+        dp := gauge.DataPoints().AppendEmpty()
+        dp.SetTimestamp(now)
+        dp.SetIntValue(errorCount)
+        dp.Attributes().PutStr("data_source", "EVENT_TABLE")
+    }
+}
+
+// ========== ORGANIZATION Metrics (Multi-Account) ==========
+
+func (s *snowflakeScraper) addOrgCreditMetrics(scopeMetrics pmetric.ScopeMetrics, orgCredits []orgCreditUsageRow, now pcommon.Timestamp) {
+    for _, credit := range orgCredits {
+        metric := scopeMetrics.Metrics().AppendEmpty()
+        metric.SetName("snowflake.org.credit_usage")
+        metric.SetDescription("Organization-level credit usage")
+        metric.SetUnit("{credits}")
+        gauge := metric.SetEmptyGauge()
+        dp := gauge.DataPoints().AppendEmpty()
+        dp.SetTimestamp(now)
+        dp.SetDoubleValue(credit.totalCredits)
+        if credit.organizationName.Valid {
+            dp.Attributes().PutStr("organization_name", credit.organizationName.String)
+        }
+        if credit.accountName.Valid {
+            dp.Attributes().PutStr("account_name", credit.accountName.String)
+        }
+        if credit.serviceType.Valid {
+            dp.Attributes().PutStr("service_type", credit.serviceType.String)
+        }
+        dp.Attributes().PutStr("data_source", "ORGANIZATION_USAGE")
+    }
+}
+
+func (s *snowflakeScraper) addOrgStorageMetrics(scopeMetrics pmetric.ScopeMetrics, orgStorage []orgStorageUsageRow, now pcommon.Timestamp) {
+    for _, storage := range orgStorage {
+        if storage.avgStorageBytes.Valid {
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.org.storage.total")
+            metric.SetDescription("Organization-level total storage")
+            metric.SetUnit("By")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetIntValue(int64(storage.avgStorageBytes.Float64))
+            if storage.organizationName.Valid {
+                dp.Attributes().PutStr("organization_name", storage.organizationName.String)
+            }
+            if storage.accountName.Valid {
+                dp.Attributes().PutStr("account_name", storage.accountName.String)
+            }
+            dp.Attributes().PutStr("data_source", "ORGANIZATION_USAGE")
+        }
+        
+        if storage.avgStageBytes.Valid {
+            stageMetric := scopeMetrics.Metrics().AppendEmpty()
+            stageMetric.SetName("snowflake.org.storage.stage")
+            stageMetric.SetDescription("Organization-level stage storage")
+            stageMetric.SetUnit("By")
+            stageGauge := stageMetric.SetEmptyGauge()
+            stageDp := stageGauge.DataPoints().AppendEmpty()
+            stageDp.SetTimestamp(now)
+            stageDp.SetIntValue(int64(storage.avgStageBytes.Float64))
+            if storage.organizationName.Valid {
+                stageDp.Attributes().PutStr("organization_name", storage.organizationName.String)
+            }
+            if storage.accountName.Valid {
+                stageDp.Attributes().PutStr("account_name", storage.accountName.String)
+            }
+            stageDp.Attributes().PutStr("data_source", "ORGANIZATION_USAGE")
+        }
+        
+        if storage.avgFailsafeBytes.Valid {
+            failsafeMetric := scopeMetrics.Metrics().AppendEmpty()
+            failsafeMetric.SetName("snowflake.org.storage.failsafe")
+            failsafeMetric.SetDescription("Organization-level failsafe storage")
+            failsafeMetric.SetUnit("By")
+            failsafeGauge := failsafeMetric.SetEmptyGauge()
+            failsafeDp := failsafeGauge.DataPoints().AppendEmpty()
+            failsafeDp.SetTimestamp(now)
+            failsafeDp.SetIntValue(int64(storage.avgFailsafeBytes.Float64))
+            if storage.organizationName.Valid {
+                failsafeDp.Attributes().PutStr("organization_name", storage.organizationName.String)
+            }
+            if storage.accountName.Valid {
+                failsafeDp.Attributes().PutStr("account_name", storage.accountName.String)
+            }
+            failsafeDp.Attributes().PutStr("data_source", "ORGANIZATION_USAGE")
+        }
+    }
+}
+
+func (s *snowflakeScraper) addOrgDataTransferMetrics(scopeMetrics pmetric.ScopeMetrics, transfers []orgDataTransferRow, now pcommon.Timestamp) {
+    for _, transfer := range transfers {
+        if transfer.totalBytesTransferred.Valid {
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.org.data_transfer.bytes")
+            metric.SetDescription("Organization-level cross-account data transfer")
+            metric.SetUnit("By")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetIntValue(int64(transfer.totalBytesTransferred.Float64))
+            if transfer.organizationName.Valid {
+                dp.Attributes().PutStr("organization_name", transfer.organizationName.String)
+            }
+            if transfer.sourceAccountName.Valid {
+                dp.Attributes().PutStr("source_account", transfer.sourceAccountName.String)
+            }
+            if transfer.targetAccountName.Valid {
+                dp.Attributes().PutStr("target_account", transfer.targetAccountName.String)
+            }
+            if transfer.sourceRegion.Valid {
+                dp.Attributes().PutStr("source_region", transfer.sourceRegion.String)
+            }
+            if transfer.targetRegion.Valid {
+                dp.Attributes().PutStr("target_region", transfer.targetRegion.String)
+            }
+            dp.Attributes().PutStr("data_source", "ORGANIZATION_USAGE")
+        }
+    }
+}
+
+func (s *snowflakeScraper) addOrgContractMetrics(scopeMetrics pmetric.ScopeMetrics, contracts []orgContractUsageRow, now pcommon.Timestamp) {
+    for _, contract := range contracts {
+        metric := scopeMetrics.Metrics().AppendEmpty()
+        metric.SetName("snowflake.org.contract.credits_used")
+        metric.SetDescription("Organization contract credits used")
+        metric.SetUnit("{credits}")
+        gauge := metric.SetEmptyGauge()
+        dp := gauge.DataPoints().AppendEmpty()
+        dp.SetTimestamp(now)
+        dp.SetDoubleValue(contract.totalCreditsUsed)
+        if contract.organizationName.Valid {
+            dp.Attributes().PutStr("organization_name", contract.organizationName.String)
+        }
+        if contract.contractNumber.Valid {
+            dp.Attributes().PutStr("contract_number", fmt.Sprintf("%d", contract.contractNumber.Int64))
+        }
+        dp.Attributes().PutStr("data_source", "ORGANIZATION_USAGE")
+        
+        if contract.totalCreditsBilled.Valid {
+            billedMetric := scopeMetrics.Metrics().AppendEmpty()
+            billedMetric.SetName("snowflake.org.contract.credits_billed")
+            billedMetric.SetDescription("Organization contract credits billed")
+            billedMetric.SetUnit("{credits}")
+            billedGauge := billedMetric.SetEmptyGauge()
+            billedDp := billedGauge.DataPoints().AppendEmpty()
+            billedDp.SetTimestamp(now)
+            billedDp.SetDoubleValue(contract.totalCreditsBilled.Float64)
+            if contract.organizationName.Valid {
+                billedDp.Attributes().PutStr("organization_name", contract.organizationName.String)
+            }
+            if contract.contractNumber.Valid {
+                billedDp.Attributes().PutStr("contract_number", fmt.Sprintf("%d", contract.contractNumber.Int64))
+            }
+            billedDp.Attributes().PutStr("data_source", "ORGANIZATION_USAGE")
+        }
+    }
+}
+
+// ========== CUSTOM QUERIES ==========
+
+func (s *snowflakeScraper) addCustomQueryMetrics(scopeMetrics pmetric.ScopeMetrics, result customQueryResult, now pcommon.Timestamp) {
+    metricType := result.metricType
+    if metricType == "" {
+        metricType = "gauge"
+    }
+    
+    var queryConfig *CustomQuery
+    for i := range s.config.CustomQueries.Queries {
+        if s.config.CustomQueries.Queries[i].Name == result.name {
+            queryConfig = &s.config.CustomQueries.Queries[i]
+            break
+        }
+    }
+    
+    if queryConfig == nil {
+        s.logger.Warn("Custom query config not found", zap.String("query_name", result.name))
+        return
+    }
+    
+    for _, row := range result.rows {
+        metric := scopeMetrics.Metrics().AppendEmpty()
+        metric.SetName(fmt.Sprintf("snowflake.custom.%s", result.name))
+        metric.SetDescription(fmt.Sprintf("Custom query: %s", result.name))
+        metric.SetUnit("1")
+        
+        valueInterface, exists := row[queryConfig.ValueColumn]
+        if !exists {
+            s.logger.Warn("Value column not found in query result",
+                zap.String("query_name", result.name),
+                zap.String("value_column", queryConfig.ValueColumn))
+            continue
+        }
+        
+        gauge := metric.SetEmptyGauge()
+        dp := gauge.DataPoints().AppendEmpty()
+        dp.SetTimestamp(now)
+        
+        var floatValue float64
+        switch v := valueInterface.(type) {
+        case float64:
+            floatValue = v
+        case float32:
+            floatValue = float64(v)
+        case int64:
+            floatValue = float64(v)
+        case int32:
+            floatValue = float64(v)
+        case int:
+            floatValue = float64(v)
+        case string:
+            parsed, err := strconv.ParseFloat(v, 64)
+            if err != nil {
+                s.logger.Warn("Failed to parse string value to float",
+                    zap.String("query_name", result.name),
+                    zap.String("value", v),
+                    zap.Error(err))
+                continue
+            }
+            floatValue = parsed
+        case []byte:
+            parsed, err := strconv.ParseFloat(string(v), 64)
+            if err != nil {
+                s.logger.Warn("Failed to parse byte value to float",
+                    zap.String("query_name", result.name),
+                    zap.Error(err))
+                continue
+            }
+            floatValue = parsed
+        default:
+            s.logger.Warn("Unsupported value type in custom query",
+                zap.String("query_name", result.name),
+                zap.String("type", fmt.Sprintf("%T", v)),
+                zap.Any("value", v))
+            continue
+        }
+        
+        dp.SetDoubleValue(floatValue)
+        
+        for _, labelCol := range queryConfig.LabelColumns {
+            if labelValue, exists := row[labelCol]; exists && labelValue != nil {
+                dp.Attributes().PutStr(labelCol, fmt.Sprintf("%v", labelValue))
+            }
+        }
+        
+        dp.Attributes().PutStr("data_source", "CUSTOM_QUERY")
     }
 }

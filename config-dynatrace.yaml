@@ -1,25 +1,27 @@
-# Dynatrace Export Configuration
-# Production monitoring with Dynatrace backend
-
 receivers:
   snowflake:
-    user: "${SNOWFLAKE_USER}"
-    password: "${SNOWFLAKE_PASSWORD}"
+    user: "YOUR_SNOWFLAKE_USER"
+    password: "YOUR_SNOWFLAKE_PASSWORD"
     account: "your-account-name"
     warehouse: "COMPUTE_WH"
     database: "SNOWFLAKE"
     schema: "ACCOUNT_USAGE"
-    
-    collection_intervals:
-      historical: "5m"
+    collection_interval: "2m"
     
     metrics:
+      # Real-time
+      current_queries: true
+      warehouse_load: true
+      # Historical  
       query_history: true
       credit_usage: true
       storage_metrics: true
       login_history: true
       data_pipeline: true
       database_storage: true
+      task_history: true
+      replication_usage: true
+      auto_clustering_history: true
 
 processors:
   batch:
@@ -29,8 +31,7 @@ exporters:
   otlphttp:
     endpoint: "https://YOUR_TENANT.live.dynatrace.com/api/v2/otlp"
     headers:
-      Authorization: "Api-Token ${DYNATRACE_API_TOKEN}"
-    timeout: 30s
+      Authorization: "Api-Token YOUR_DYNATRACE_API_TOKEN"
 
 service:
   pipelines:
