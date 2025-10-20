@@ -21,25 +21,28 @@ type Config struct {
     Schema    string `mapstructure:"schema"`
     Role      string `mapstructure:"role"`
     
-    // Collection intervals per tier
-    CollectionIntervals CollectionIntervals `mapstructure:"collection_intervals"`
+    // Collection interval
+    CollectionInterval string `mapstructure:"collection_interval"`
     
     // Metric category toggles
     Metrics MetricsConfig `mapstructure:"metrics"`
 }
 
-type CollectionIntervals struct {
-    Historical string `mapstructure:"historical"`  // ACCOUNT_USAGE queries
-}
-
 type MetricsConfig struct {
-    // Historical tier (ACCOUNT_USAGE)
-    QueryHistory      bool `mapstructure:"query_history"`
-    CreditUsage       bool `mapstructure:"credit_usage"`
-    StorageMetrics    bool `mapstructure:"storage_metrics"`
-    LoginHistory      bool `mapstructure:"login_history"`
-    DataPipeline      bool `mapstructure:"data_pipeline"`
-    DatabaseStorage   bool `mapstructure:"database_storage"`
+    // INFORMATION_SCHEMA metrics (REAL-TIME - no latency!)
+    CurrentQueries    bool `mapstructure:"current_queries"`      // Current query activity (last 5min)
+    WarehouseLoad     bool `mapstructure:"warehouse_load"`       // Warehouse queue depth & load
+    
+    // ACCOUNT_USAGE metrics (45min-3hr latency)
+    QueryHistory         bool `mapstructure:"query_history"`          // Historical query performance
+    CreditUsage          bool `mapstructure:"credit_usage"`           // Warehouse credit consumption
+    StorageMetrics       bool `mapstructure:"storage_metrics"`        // Account-level storage
+    LoginHistory         bool `mapstructure:"login_history"`          // Authentication attempts
+    DataPipeline         bool `mapstructure:"data_pipeline"`          // Snowpipe usage
+    DatabaseStorage      bool `mapstructure:"database_storage"`       // Per-database storage
+    TaskHistory          bool `mapstructure:"task_history"`           // Task execution history
+    ReplicationUsage     bool `mapstructure:"replication_usage"`      // Database replication
+    AutoClusteringHistory bool `mapstructure:"auto_clustering_history"` // Auto-clustering activity
 }
 
 func (cfg *Config) Validate() error {
@@ -59,39 +62,44 @@ func (cfg *Config) Validate() error {
         return errors.New("database is required")
     }
     
-    // Validate collection intervals
-    if cfg.CollectionIntervals.Historical != "" {
-        if _, err := time.ParseDuration(cfg.CollectionIntervals.Historical); err != nil {
-            return fmt.Errorf("invalid historical collection_interval: %w", err)
+    // Validate collection interval
+    if cfg.CollectionInterval != "" {
+        if _, err := time.ParseDuration(cfg.CollectionInterval); err != nil {
+            return fmt.Errorf("invalid collection_interval: %w", err)
         }
     }
     
     return nil
 }
 
-func (cfg *Config) GetHistoricalInterval() time.Duration {
-    if cfg.CollectionIntervals.Historical != "" {
-        d, _ := time.ParseDuration(cfg.CollectionIntervals.Historical)
+func (cfg *Config) GetCollectionInterval() time.Duration {
+    if cfg.CollectionInterval != "" {
+        d, _ := time.ParseDuration(cfg.CollectionInterval)
         return d
     }
-    return 5 * time.Minute // default
+    return 2 * time.Minute // default
 }
 
 func createDefaultConfig() component.Config {
     return &Config{
-        ClientConfig: confighttp.NewDefaultClientConfig(),
-        Schema:      "ACCOUNT_USAGE",
-        Role:        "ACCOUNTADMIN",
-        CollectionIntervals: CollectionIntervals{
-            Historical: "5m",
-        },
+        ClientConfig:       confighttp.NewDefaultClientConfig(),
+        CollectionInterval: "2m",
+        Schema:            "ACCOUNT_USAGE",
+        Role:              "ACCOUNTADMIN",
         Metrics: MetricsConfig{
-            QueryHistory:    true,
-            CreditUsage:     true,
-            StorageMetrics:  true,
-            LoginHistory:    true,
-            DataPipeline:    true,
-            DatabaseStorage: true,
+            // Real-time metrics (INFORMATION_SCHEMA)
+            CurrentQueries: true,
+            WarehouseLoad:  true,
+            // Historical metrics (ACCOUNT_USAGE)
+            QueryHistory:          true,
+            CreditUsage:           true,
+            StorageMetrics:        true,
+            LoginHistory:          true,
+            DataPipeline:          true,
+            DatabaseStorage:       true,
+            TaskHistory:           true,
+            ReplicationUsage:      true,
+            AutoClusteringHistory: true,
         },
     }
 }

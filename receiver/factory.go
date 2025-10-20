@@ -35,7 +35,7 @@ func createMetricsReceiver(
     
     snowflakeCfg := cfg.(*Config)
     
-    interval := snowflakeCfg.GetHistoricalInterval()
+    interval := snowflakeCfg.GetCollectionInterval()
     
     s, err := newSnowflakeScraper(settings, snowflakeCfg)
     if err != nil {
