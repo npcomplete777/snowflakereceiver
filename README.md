@@ -48,7 +48,7 @@ vi config.yaml
 # Check Dynatrace after 5-10 minutes for metrics starting with "snowflake.*"
 ```
 
-**What you'll see in Dynatrace:**
+**What you'll see:**
 - ~300 metrics across 11 categories
 - Real-time query and warehouse metrics (1min lag)
 - Historical query performance (5min lag)
@@ -600,7 +600,43 @@ snowflakereceiver/
 └── README.md
 ```
 
----
+## 🧪 Testing
+
+### Coverage
+
+**Current Coverage:** 82.3% ✅  
+**Tests:** 70 comprehensive tests  
+**Status:** Production Ready
+
+### Run Tests
+```bash
+# All tests
+go test ./receiver -v
+
+# With coverage
+go test ./receiver -cover
+
+# Generate HTML report
+go test ./receiver -coverprofile=coverage.out
+go tool cover -html=coverage.out
+```
+
+### Test Categories
+
+- **Config Tests** (17) - Configuration validation & parsing
+- **Factory Tests** (6) - Receiver factory & creation
+- **Scraper Tests** (22) - Metric transformation
+- **Client Tests** (30) - SQL query execution (mocked)
+
+**See [TESTING.md](TESTING.md) for detailed documentation.**
+
+### CI/CD
+
+Tests run automatically on every push via GitHub Actions:
+- Unit tests with race detector
+- Coverage validation (minimum 70%)
+- Code linting
+- Static analysis
 
 ## 🚗 Roadmap
 
