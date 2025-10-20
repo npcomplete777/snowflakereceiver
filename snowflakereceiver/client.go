@@ -4,15 +4,27 @@ import (
     "context"
     "database/sql"
     "fmt"
+    "regexp"
+    "time"
     
     _ "github.com/snowflakedb/gosnowflake"
     "go.uber.org/zap"
 )
 
+// Query timeout configuration
+const (
+    defaultQueryTimeout = 30 * time.Second
+    maxRowsPerQuery     = 10000
+)
+
+// Table/column name whitelist regex (alphanumeric, underscore, dot)
+var identifierRegex = regexp.MustCompile(`^[a-zA-Z0-9_\.]+$`)
+
 type snowflakeClient struct {
-    logger *zap.Logger
-    config *Config
-    db     *sql.DB
+    logger       *zap.Logger
+    config       *Config
+    db           *sql.DB
+    queryTimeout time.Duration
 }
 
 type snowflakeMetrics struct {
@@ -166,17 +178,38 @@ type customQueryResult struct {
     rows       []map[string]interface{}
 }
 
+// validateIdentifier validates table/column names against SQL injection
+func validateIdentifier(identifier string) error {
+    if !identifierRegex.MatchString(identifier) {
+        return fmt.Errorf("invalid identifier: %s (must be alphanumeric with underscores/dots only)", identifier)
+    }
+    return nil
+}
+
 func newSnowflakeClient(logger *zap.Logger, config *Config) (*snowflakeClient, error) {
     return &snowflakeClient{
-        logger: logger,
-        config: config,
+        logger:       logger,
+        config:       config,
+        queryTimeout: defaultQueryTimeout,
     }, nil
+}
+
+// Close closes the database connection
+func (c *snowflakeClient) Close() error {
+    if c.db != nil {
+        return c.db.Close()
+    }
+    return nil
 }
 
 func (c *snowflakeClient) connect(ctx context.Context) error {
     if c.db != nil {
         return nil
     }
+    
+    // Add connection timeout to context
+    connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+    defer cancel()
     
     dsn := fmt.Sprintf("%s:%s@%s/%s/%s?warehouse=%s",
         c.config.User,
@@ -192,12 +225,20 @@ func (c *snowflakeClient) connect(ctx context.Context) error {
         return fmt.Errorf("failed to open Snowflake connection: %w", err)
     }
     
-    if err := db.PingContext(ctx); err != nil {
+    // Set connection pool limits
+    db.SetMaxOpenConns(10)
+    db.SetMaxIdleConns(5)
+    db.SetConnMaxLifetime(30 * time.Minute)
+    
+    if err := db.PingContext(connectCtx); err != nil {
+        db.Close()
         return fmt.Errorf("failed to ping Snowflake: %w", err)
     }
     
     c.db = db
-    c.logger.Info("Successfully connected to Snowflake")
+    c.logger.Info("Successfully connected to Snowflake",
+        zap.String("account", c.config.Account),
+        zap.String("warehouse", c.config.Warehouse))
     return nil
 }
 
@@ -330,6 +371,9 @@ func (c *snowflakeClient) queryMetrics(ctx context.Context) (*snowflakeMetrics, 
 }
 
 func (c *snowflakeClient) queryCurrentQueries(ctx context.Context, metrics *snowflakeMetrics) error {
+    queryCtx, cancel := context.WithTimeout(ctx, c.queryTimeout)
+    defer cancel()
+    
     query := `
         SELECT 
             WAREHOUSE_NAME,
@@ -341,9 +385,10 @@ func (c *snowflakeClient) queryCurrentQueries(ctx context.Context, metrics *snow
         FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.QUERY_HISTORY())
         WHERE START_TIME >= DATEADD(minute, -5, CURRENT_TIMESTAMP())
         GROUP BY WAREHOUSE_NAME, QUERY_TYPE, EXECUTION_STATUS
+        LIMIT ?
     `
     
-    rows, err := c.db.QueryContext(ctx, query)
+    rows, err := c.db.QueryContext(queryCtx, query, maxRowsPerQuery)
     if err != nil {
         return fmt.Errorf("failed to query current queries: %w", err)
     }
@@ -368,6 +413,9 @@ func (c *snowflakeClient) queryCurrentQueries(ctx context.Context, metrics *snow
 }
 
 func (c *snowflakeClient) queryWarehouseLoad(ctx context.Context, metrics *snowflakeMetrics) error {
+    queryCtx, cancel := context.WithTimeout(ctx, c.queryTimeout)
+    defer cancel()
+    
     query := `
         SELECT 
             WAREHOUSE_NAME,
@@ -378,9 +426,10 @@ func (c *snowflakeClient) queryWarehouseLoad(ctx context.Context, metrics *snowf
         FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.WAREHOUSE_LOAD_HISTORY())
         WHERE START_TIME >= DATEADD(minute, -5, CURRENT_TIMESTAMP())
         GROUP BY WAREHOUSE_NAME
+        LIMIT ?
     `
     
-    rows, err := c.db.QueryContext(ctx, query)
+    rows, err := c.db.QueryContext(queryCtx, query, maxRowsPerQuery)
     if err != nil {
         return fmt.Errorf("failed to query warehouse load: %w", err)
     }
@@ -404,6 +453,9 @@ func (c *snowflakeClient) queryWarehouseLoad(ctx context.Context, metrics *snowf
 }
 
 func (c *snowflakeClient) queryQueryHistory(ctx context.Context, metrics *snowflakeMetrics) error {
+    queryCtx, cancel := context.WithTimeout(ctx, c.queryTimeout)
+    defer cancel()
+    
     query := `
         SELECT 
             WAREHOUSE_NAME,
@@ -418,9 +470,10 @@ func (c *snowflakeClient) queryQueryHistory(ctx context.Context, metrics *snowfl
         FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
         WHERE START_TIME >= DATEADD(hour, -1, CURRENT_TIMESTAMP())
         GROUP BY WAREHOUSE_NAME, QUERY_TYPE, EXECUTION_STATUS
+        LIMIT ?
     `
     
-    rows, err := c.db.QueryContext(ctx, query)
+    rows, err := c.db.QueryContext(queryCtx, query, maxRowsPerQuery)
     if err != nil {
         return fmt.Errorf("failed to query query history: %w", err)
     }
@@ -448,6 +501,9 @@ func (c *snowflakeClient) queryQueryHistory(ctx context.Context, metrics *snowfl
 }
 
 func (c *snowflakeClient) queryCreditUsage(ctx context.Context, metrics *snowflakeMetrics) error {
+    queryCtx, cancel := context.WithTimeout(ctx, c.queryTimeout)
+    defer cancel()
+    
     query := `
         SELECT 
             WAREHOUSE_NAME,
@@ -457,9 +513,10 @@ func (c *snowflakeClient) queryCreditUsage(ctx context.Context, metrics *snowfla
         FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
         WHERE START_TIME >= DATEADD(hour, -1, CURRENT_TIMESTAMP())
         GROUP BY WAREHOUSE_NAME
+        LIMIT ?
     `
     
-    rows, err := c.db.QueryContext(ctx, query)
+    rows, err := c.db.QueryContext(queryCtx, query, maxRowsPerQuery)
     if err != nil {
         return fmt.Errorf("failed to query credit usage: %w", err)
     }
@@ -482,6 +539,9 @@ func (c *snowflakeClient) queryCreditUsage(ctx context.Context, metrics *snowfla
 }
 
 func (c *snowflakeClient) queryStorageUsage(ctx context.Context, metrics *snowflakeMetrics) error {
+    queryCtx, cancel := context.WithTimeout(ctx, c.queryTimeout)
+    defer cancel()
+    
     query := `
         SELECT 
             AVG(STORAGE_BYTES + STAGE_BYTES + FAILSAFE_BYTES) as TOTAL_STORAGE_BYTES,
@@ -491,7 +551,7 @@ func (c *snowflakeClient) queryStorageUsage(ctx context.Context, metrics *snowfl
         WHERE USAGE_DATE >= DATEADD(day, -1, CURRENT_DATE())
     `
     
-    rows, err := c.db.QueryContext(ctx, query)
+    rows, err := c.db.QueryContext(queryCtx, query)
     if err != nil {
         return fmt.Errorf("failed to query storage usage: %w", err)
     }
@@ -513,6 +573,9 @@ func (c *snowflakeClient) queryStorageUsage(ctx context.Context, metrics *snowfl
 }
 
 func (c *snowflakeClient) queryLoginHistory(ctx context.Context, metrics *snowflakeMetrics) error {
+    queryCtx, cancel := context.WithTimeout(ctx, c.queryTimeout)
+    defer cancel()
+    
     query := `
         SELECT 
             IS_SUCCESS,
@@ -521,9 +584,10 @@ func (c *snowflakeClient) queryLoginHistory(ctx context.Context, metrics *snowfl
         FROM SNOWFLAKE.ACCOUNT_USAGE.LOGIN_HISTORY
         WHERE EVENT_TIMESTAMP >= DATEADD(hour, -1, CURRENT_TIMESTAMP())
         GROUP BY IS_SUCCESS, ERROR_CODE
+        LIMIT ?
     `
     
-    rows, err := c.db.QueryContext(ctx, query)
+    rows, err := c.db.QueryContext(queryCtx, query, maxRowsPerQuery)
     if err != nil {
         return fmt.Errorf("failed to query login history: %w", err)
     }
@@ -545,6 +609,9 @@ func (c *snowflakeClient) queryLoginHistory(ctx context.Context, metrics *snowfl
 }
 
 func (c *snowflakeClient) queryPipeUsage(ctx context.Context, metrics *snowflakeMetrics) error {
+    queryCtx, cancel := context.WithTimeout(ctx, c.queryTimeout)
+    defer cancel()
+    
     query := `
         SELECT 
             PIPE_NAME,
@@ -554,9 +621,10 @@ func (c *snowflakeClient) queryPipeUsage(ctx context.Context, metrics *snowflake
         FROM SNOWFLAKE.ACCOUNT_USAGE.PIPE_USAGE_HISTORY
         WHERE START_TIME >= DATEADD(hour, -1, CURRENT_TIMESTAMP())
         GROUP BY PIPE_NAME
+        LIMIT ?
     `
     
-    rows, err := c.db.QueryContext(ctx, query)
+    rows, err := c.db.QueryContext(queryCtx, query, maxRowsPerQuery)
     if err != nil {
         return fmt.Errorf("failed to query pipe usage: %w", err)
     }
@@ -579,6 +647,9 @@ func (c *snowflakeClient) queryPipeUsage(ctx context.Context, metrics *snowflake
 }
 
 func (c *snowflakeClient) queryDatabaseStorage(ctx context.Context, metrics *snowflakeMetrics) error {
+    queryCtx, cancel := context.WithTimeout(ctx, c.queryTimeout)
+    defer cancel()
+    
     query := `
         SELECT 
             DATABASE_NAME,
@@ -587,9 +658,10 @@ func (c *snowflakeClient) queryDatabaseStorage(ctx context.Context, metrics *sno
         FROM SNOWFLAKE.ACCOUNT_USAGE.DATABASE_STORAGE_USAGE_HISTORY
         WHERE USAGE_DATE >= DATEADD(day, -1, CURRENT_DATE())
         GROUP BY DATABASE_NAME
+        LIMIT ?
     `
     
-    rows, err := c.db.QueryContext(ctx, query)
+    rows, err := c.db.QueryContext(queryCtx, query, maxRowsPerQuery)
     if err != nil {
         return fmt.Errorf("failed to query database storage: %w", err)
     }
@@ -611,7 +683,9 @@ func (c *snowflakeClient) queryDatabaseStorage(ctx context.Context, metrics *sno
 }
 
 func (c *snowflakeClient) queryTaskHistory(ctx context.Context, metrics *snowflakeMetrics) error {
-    // FIX: Use DATEDIFF to calculate execution time (COMPLETED_TIME - SCHEDULED_TIME)
+    queryCtx, cancel := context.WithTimeout(ctx, c.queryTimeout)
+    defer cancel()
+    
     query := `
         SELECT 
             DATABASE_NAME,
@@ -624,9 +698,10 @@ func (c *snowflakeClient) queryTaskHistory(ctx context.Context, metrics *snowfla
         WHERE SCHEDULED_TIME >= DATEADD(hour, -1, CURRENT_TIMESTAMP())
           AND COMPLETED_TIME IS NOT NULL
         GROUP BY DATABASE_NAME, SCHEMA_NAME, NAME, STATE
+        LIMIT ?
     `
     
-    rows, err := c.db.QueryContext(ctx, query)
+    rows, err := c.db.QueryContext(queryCtx, query, maxRowsPerQuery)
     if err != nil {
         return fmt.Errorf("failed to query task history: %w", err)
     }
@@ -651,6 +726,9 @@ func (c *snowflakeClient) queryTaskHistory(ctx context.Context, metrics *snowfla
 }
 
 func (c *snowflakeClient) queryReplicationUsage(ctx context.Context, metrics *snowflakeMetrics) error {
+    queryCtx, cancel := context.WithTimeout(ctx, c.queryTimeout)
+    defer cancel()
+    
     query := `
         SELECT 
             DATABASE_NAME,
@@ -659,9 +737,10 @@ func (c *snowflakeClient) queryReplicationUsage(ctx context.Context, metrics *sn
         FROM SNOWFLAKE.ACCOUNT_USAGE.REPLICATION_USAGE_HISTORY
         WHERE START_TIME >= DATEADD(hour, -1, CURRENT_TIMESTAMP())
         GROUP BY DATABASE_NAME
+        LIMIT ?
     `
     
-    rows, err := c.db.QueryContext(ctx, query)
+    rows, err := c.db.QueryContext(queryCtx, query, maxRowsPerQuery)
     if err != nil {
         return fmt.Errorf("failed to query replication usage: %w", err)
     }
@@ -683,7 +762,9 @@ func (c *snowflakeClient) queryReplicationUsage(ctx context.Context, metrics *sn
 }
 
 func (c *snowflakeClient) queryAutoClusteringHistory(ctx context.Context, metrics *snowflakeMetrics) error {
-    // FIX: Use NUM_BYTES_RECLUSTERED and NUM_ROWS_RECLUSTERED (correct column names)
+    queryCtx, cancel := context.WithTimeout(ctx, c.queryTimeout)
+    defer cancel()
+    
     query := `
         SELECT 
             DATABASE_NAME,
@@ -695,9 +776,10 @@ func (c *snowflakeClient) queryAutoClusteringHistory(ctx context.Context, metric
         FROM SNOWFLAKE.ACCOUNT_USAGE.AUTOMATIC_CLUSTERING_HISTORY
         WHERE START_TIME >= DATEADD(hour, -1, CURRENT_TIMESTAMP())
         GROUP BY DATABASE_NAME, SCHEMA_NAME, TABLE_NAME
+        LIMIT ?
     `
     
-    rows, err := c.db.QueryContext(ctx, query)
+    rows, err := c.db.QueryContext(queryCtx, query, maxRowsPerQuery)
     if err != nil {
         return fmt.Errorf("failed to query auto-clustering history: %w", err)
     }
@@ -726,6 +808,22 @@ func (c *snowflakeClient) queryEventTableLogs(ctx context.Context, metrics *snow
         return fmt.Errorf("event table name not configured")
     }
     
+    // Validate table name to prevent SQL injection
+    if err := validateIdentifier(c.config.EventTables.TableName); err != nil {
+        return fmt.Errorf("invalid event table name: %w", err)
+    }
+    
+    // Validate event type (whitelist)
+    validEventTypes := map[string]bool{
+        "QUERY": true, "TASK": true, "FUNCTION": true, "PROCEDURE": true,
+    }
+    if !validEventTypes[eventType] {
+        return fmt.Errorf("invalid event type: %s", eventType)
+    }
+    
+    queryCtx, cancel := context.WithTimeout(ctx, c.queryTimeout)
+    defer cancel()
+    
     query := fmt.Sprintf(`
         SELECT 
             RESOURCE_ATTRIBUTES['snow.event.type']::STRING as EVENT_TYPE,
@@ -733,11 +831,11 @@ func (c *snowflakeClient) queryEventTableLogs(ctx context.Context, metrics *snow
             RECORD['error.message']::STRING as ERROR_MESSAGE
         FROM %s
         WHERE TIMESTAMP >= DATEADD(minute, -5, CURRENT_TIMESTAMP())
-          AND RESOURCE_ATTRIBUTES['snow.event.type']::STRING = '%s'
-        LIMIT 1000
-    `, c.config.EventTables.TableName, eventType)
+          AND RESOURCE_ATTRIBUTES['snow.event.type']::STRING = ?
+        LIMIT ?
+    `, c.config.EventTables.TableName)
     
-    rows, err := c.db.QueryContext(ctx, query)
+    rows, err := c.db.QueryContext(queryCtx, query, eventType, maxRowsPerQuery)
     if err != nil {
         return fmt.Errorf("failed to query event table logs: %w", err)
     }
@@ -773,6 +871,22 @@ func (c *snowflakeClient) queryEventTableLogs(ctx context.Context, metrics *snow
 func (c *snowflakeClient) queryOrgCreditUsage(ctx context.Context, metrics *snowflakeMetrics) error {
     cols := c.config.Organization.OrgCreditUsage.Columns
     
+    // Validate all column names
+    for _, col := range []string{
+        cols.GetOrganizationName(),
+        cols.GetAccountName(),
+        cols.GetServiceType(),
+        cols.GetCreditsUsed(),
+        cols.GetUsageDate(),
+    } {
+        if err := validateIdentifier(col); err != nil {
+            return fmt.Errorf("invalid column name in org credit usage: %w", err)
+        }
+    }
+    
+    queryCtx, cancel := context.WithTimeout(ctx, c.queryTimeout)
+    defer cancel()
+    
     query := fmt.Sprintf(`
         SELECT 
             %s as ORGANIZATION_NAME,
@@ -782,6 +896,7 @@ func (c *snowflakeClient) queryOrgCreditUsage(ctx context.Context, metrics *snow
         FROM SNOWFLAKE.ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY
         WHERE %s >= DATEADD(day, -1, CURRENT_DATE())
         GROUP BY %s, %s, %s
+        LIMIT ?
     `,
         cols.GetOrganizationName(),
         cols.GetAccountName(),
@@ -793,7 +908,7 @@ func (c *snowflakeClient) queryOrgCreditUsage(ctx context.Context, metrics *snow
         cols.GetServiceType(),
     )
     
-    rows, err := c.db.QueryContext(ctx, query)
+    rows, err := c.db.QueryContext(queryCtx, query, maxRowsPerQuery)
     if err != nil {
         return fmt.Errorf("failed to query org credit usage: %w", err)
     }
@@ -818,6 +933,23 @@ func (c *snowflakeClient) queryOrgCreditUsage(ctx context.Context, metrics *snow
 func (c *snowflakeClient) queryOrgStorageUsage(ctx context.Context, metrics *snowflakeMetrics) error {
     cols := c.config.Organization.OrgStorageUsage.Columns
     
+    // Validate all column names
+    for _, col := range []string{
+        cols.GetOrganizationName(),
+        cols.GetAccountName(),
+        cols.GetStorageBytes(),
+        cols.GetStageBytes(),
+        cols.GetFailsafeBytes(),
+        cols.GetUsageDate(),
+    } {
+        if err := validateIdentifier(col); err != nil {
+            return fmt.Errorf("invalid column name in org storage usage: %w", err)
+        }
+    }
+    
+    queryCtx, cancel := context.WithTimeout(ctx, c.queryTimeout)
+    defer cancel()
+    
     query := fmt.Sprintf(`
         SELECT 
             %s as ORGANIZATION_NAME,
@@ -828,6 +960,7 @@ func (c *snowflakeClient) queryOrgStorageUsage(ctx context.Context, metrics *sno
         FROM SNOWFLAKE.ORGANIZATION_USAGE.STORAGE_DAILY_HISTORY
         WHERE %s >= DATEADD(day, -1, CURRENT_DATE())
         GROUP BY %s, %s
+        LIMIT ?
     `,
         cols.GetOrganizationName(),
         cols.GetAccountName(),
@@ -839,7 +972,7 @@ func (c *snowflakeClient) queryOrgStorageUsage(ctx context.Context, metrics *sno
         cols.GetAccountName(),
     )
     
-    rows, err := c.db.QueryContext(ctx, query)
+    rows, err := c.db.QueryContext(queryCtx, query, maxRowsPerQuery)
     if err != nil {
         return fmt.Errorf("failed to query org storage usage: %w", err)
     }
@@ -865,6 +998,24 @@ func (c *snowflakeClient) queryOrgStorageUsage(ctx context.Context, metrics *sno
 func (c *snowflakeClient) queryOrgDataTransfer(ctx context.Context, metrics *snowflakeMetrics) error {
     cols := c.config.Organization.OrgDataTransfer.Columns
     
+    // Validate all column names
+    for _, col := range []string{
+        cols.GetOrganizationName(),
+        cols.GetSourceAccountName(),
+        cols.GetTargetAccountName(),
+        cols.GetSourceRegion(),
+        cols.GetTargetRegion(),
+        cols.GetBytesTransferred(),
+        cols.GetTransferDate(),
+    } {
+        if err := validateIdentifier(col); err != nil {
+            return fmt.Errorf("invalid column name in org data transfer: %w", err)
+        }
+    }
+    
+    queryCtx, cancel := context.WithTimeout(ctx, c.queryTimeout)
+    defer cancel()
+    
     query := fmt.Sprintf(`
         SELECT 
             %s as ORGANIZATION_NAME,
@@ -876,6 +1027,7 @@ func (c *snowflakeClient) queryOrgDataTransfer(ctx context.Context, metrics *sno
         FROM SNOWFLAKE.ORGANIZATION_USAGE.DATA_TRANSFER_DAILY_HISTORY
         WHERE %s >= DATEADD(day, -1, CURRENT_DATE())
         GROUP BY %s, %s, %s, %s, %s
+        LIMIT ?
     `,
         cols.GetOrganizationName(),
         cols.GetSourceAccountName(),
@@ -891,7 +1043,7 @@ func (c *snowflakeClient) queryOrgDataTransfer(ctx context.Context, metrics *sno
         cols.GetTargetRegion(),
     )
     
-    rows, err := c.db.QueryContext(ctx, query)
+    rows, err := c.db.QueryContext(queryCtx, query, maxRowsPerQuery)
     if err != nil {
         return fmt.Errorf("failed to query org data transfer: %w", err)
     }
@@ -918,6 +1070,22 @@ func (c *snowflakeClient) queryOrgDataTransfer(ctx context.Context, metrics *sno
 func (c *snowflakeClient) queryOrgContractUsage(ctx context.Context, metrics *snowflakeMetrics) error {
     cols := c.config.Organization.OrgContractUsage.Columns
     
+    // Validate all column names
+    for _, col := range []string{
+        cols.GetOrganizationName(),
+        cols.GetContractNumber(),
+        cols.GetCreditsUsed(),
+        cols.GetCreditsBilled(),
+        cols.GetUsageDate(),
+    } {
+        if err := validateIdentifier(col); err != nil {
+            return fmt.Errorf("invalid column name in org contract usage: %w", err)
+        }
+    }
+    
+    queryCtx, cancel := context.WithTimeout(ctx, c.queryTimeout)
+    defer cancel()
+    
     query := fmt.Sprintf(`
         SELECT 
             %s as ORGANIZATION_NAME,
@@ -927,6 +1095,7 @@ func (c *snowflakeClient) queryOrgContractUsage(ctx context.Context, metrics *sn
         FROM SNOWFLAKE.ORGANIZATION_USAGE.CONTRACT_ITEMS
         WHERE %s >= DATEADD(day, -1, CURRENT_DATE())
         GROUP BY %s, %s
+        LIMIT ?
     `,
         cols.GetOrganizationName(),
         cols.GetContractNumber(),
@@ -937,7 +1106,7 @@ func (c *snowflakeClient) queryOrgContractUsage(ctx context.Context, metrics *sn
         cols.GetContractNumber(),
     )
     
-    rows, err := c.db.QueryContext(ctx, query)
+    rows, err := c.db.QueryContext(queryCtx, query, maxRowsPerQuery)
     if err != nil {
         return fmt.Errorf("failed to query org contract usage: %w", err)
     }
@@ -960,7 +1129,10 @@ func (c *snowflakeClient) queryOrgContractUsage(ctx context.Context, metrics *sn
 }
 
 func (c *snowflakeClient) executeCustomQuery(ctx context.Context, metrics *snowflakeMetrics, query *CustomQuery) error {
-    rows, err := c.db.QueryContext(ctx, query.SQL)
+    queryCtx, cancel := context.WithTimeout(ctx, c.queryTimeout)
+    defer cancel()
+    
+    rows, err := c.db.QueryContext(queryCtx, query.SQL)
     if err != nil {
         return fmt.Errorf("failed to execute custom query %s: %w", query.Name, err)
     }
@@ -972,8 +1144,16 @@ func (c *snowflakeClient) executeCustomQuery(ctx context.Context, metrics *snowf
     }
     
     var resultRows []map[string]interface{}
+    rowCount := 0
     
     for rows.Next() {
+        if rowCount >= maxRowsPerQuery {
+            c.logger.Warn("Custom query exceeded max rows",
+                zap.String("query_name", query.Name),
+                zap.Int("max_rows", maxRowsPerQuery))
+            break
+        }
+        
         values := make([]interface{}, len(columns))
         valuePtrs := make([]interface{}, len(columns))
         for i := range values {
@@ -989,6 +1169,7 @@ func (c *snowflakeClient) executeCustomQuery(ctx context.Context, metrics *snowf
             row[col] = values[i]
         }
         resultRows = append(resultRows, row)
+        rowCount++
     }
     
     metrics.customQueryResults = append(metrics.customQueryResults, customQueryResult{

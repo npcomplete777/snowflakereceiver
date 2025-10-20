@@ -25,9 +25,10 @@ func newMockClient(t *testing.T) (*snowflakeClient, sqlmock.Sqlmock) {
     }
     
     client := &snowflakeClient{
-        logger: zap.NewNop(),
-        config: config,
-        db:     db,
+        logger:       zap.NewNop(),
+        config:       config,
+        db:           db,
+        queryTimeout: defaultQueryTimeout,
     }
     
     return client, mock
@@ -57,7 +58,8 @@ func TestClient_QueryCurrentQueries(t *testing.T) {
         "QUERY_COUNT", "AVG_EXECUTION_TIME", "AVG_BYTES_SCANNED",
     }).AddRow("WH1", "SELECT", "SUCCESS", 10, 1500.0, 1024000.0)
     
-    mock.ExpectQuery("SELECT(.+)FROM TABLE\\(SNOWFLAKE.INFORMATION_SCHEMA.QUERY_HISTORY\\(\\)\\)").
+    mock.ExpectQuery("SELECT(.+)FROM TABLE\\(SNOWFLAKE.INFORMATION_SCHEMA.QUERY_HISTORY\\(\\)\\)(.+)LIMIT").
+        WithArgs(maxRowsPerQuery).
         WillReturnRows(rows)
     
     metrics := &snowflakeMetrics{}
@@ -78,7 +80,8 @@ func TestClient_QueryWarehouseLoad(t *testing.T) {
         "AVG_QUEUED_PROVISIONING", "AVG_BLOCKED",
     }).AddRow("WH1", 5.5, 2.0, 0.5, 0.0)
     
-    mock.ExpectQuery("SELECT(.+)FROM TABLE\\(SNOWFLAKE.INFORMATION_SCHEMA.WAREHOUSE_LOAD_HISTORY\\(\\)\\)").
+    mock.ExpectQuery("SELECT(.+)FROM TABLE\\(SNOWFLAKE.INFORMATION_SCHEMA.WAREHOUSE_LOAD_HISTORY\\(\\)\\)(.+)LIMIT").
+        WithArgs(maxRowsPerQuery).
         WillReturnRows(rows)
     
     metrics := &snowflakeMetrics{}
@@ -99,7 +102,8 @@ func TestClient_QueryQueryHistory(t *testing.T) {
         "AVG_ROWS_PRODUCED", "AVG_COMPILATION_TIME",
     }).AddRow("WH1", "SELECT", "SUCCESS", 100, 2500.0, 1024000.0, 512000.0, 1000.0, 100.0)
     
-    mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY").
+    mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY(.+)LIMIT").
+        WithArgs(maxRowsPerQuery).
         WillReturnRows(rows)
     
     metrics := &snowflakeMetrics{}
@@ -118,7 +122,8 @@ func TestClient_QueryCreditUsage(t *testing.T) {
         "WAREHOUSE_NAME", "TOTAL_CREDITS", "COMPUTE_CREDITS", "CLOUD_SERVICE_CREDITS",
     }).AddRow("WH1", 10.5, 8.0, 2.5)
     
-    mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY").
+    mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY(.+)LIMIT").
+        WithArgs(maxRowsPerQuery).
         WillReturnRows(rows)
     
     metrics := &snowflakeMetrics{}
@@ -158,7 +163,8 @@ func TestClient_QueryLoginHistory(t *testing.T) {
         AddRow("YES", sql.NullString{}, 100).
         AddRow("NO", "390201", 5)
     
-    mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.LOGIN_HISTORY").
+    mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.LOGIN_HISTORY(.+)LIMIT").
+        WithArgs(maxRowsPerQuery).
         WillReturnRows(rows)
     
     metrics := &snowflakeMetrics{}
@@ -178,7 +184,8 @@ func TestClient_QueryPipeUsage(t *testing.T) {
         "PIPE_NAME", "TOTAL_CREDITS", "BYTES_INSERTED", "FILES_INSERTED",
     }).AddRow("MY_PIPE", 5.25, 10240000.0, 100)
     
-    mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.PIPE_USAGE_HISTORY").
+    mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.PIPE_USAGE_HISTORY(.+)LIMIT").
+        WithArgs(maxRowsPerQuery).
         WillReturnRows(rows)
     
     metrics := &snowflakeMetrics{}
@@ -197,7 +204,8 @@ func TestClient_QueryDatabaseStorage(t *testing.T) {
         "DATABASE_NAME", "AVG_DATABASE_BYTES", "AVG_FAILSAFE_BYTES",
     }).AddRow("MY_DB", 1024000.0, 102400.0)
     
-    mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.DATABASE_STORAGE_USAGE_HISTORY").
+    mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.DATABASE_STORAGE_USAGE_HISTORY(.+)LIMIT").
+        WithArgs(maxRowsPerQuery).
         WillReturnRows(rows)
     
     metrics := &snowflakeMetrics{}
@@ -217,7 +225,8 @@ func TestClient_QueryTaskHistory(t *testing.T) {
         "EXECUTION_COUNT", "AVG_EXECUTION_TIME",
     }).AddRow("MY_DB", "MY_SCHEMA", "MY_TASK", "SUCCEEDED", 50, 5000.0)
     
-    mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.TASK_HISTORY").
+    mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.TASK_HISTORY(.+)LIMIT").
+        WithArgs(maxRowsPerQuery).
         WillReturnRows(rows)
     
     metrics := &snowflakeMetrics{}
@@ -236,7 +245,8 @@ func TestClient_QueryReplicationUsage(t *testing.T) {
         "DATABASE_NAME", "TOTAL_CREDITS", "BYTES_TRANSFERRED",
     }).AddRow("MY_DB", 3.5, 10240000.0)
     
-    mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.REPLICATION_USAGE_HISTORY").
+    mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.REPLICATION_USAGE_HISTORY(.+)LIMIT").
+        WithArgs(maxRowsPerQuery).
         WillReturnRows(rows)
     
     metrics := &snowflakeMetrics{}
@@ -256,7 +266,8 @@ func TestClient_QueryAutoClusteringHistory(t *testing.T) {
         "BYTES_RECLUSTERED", "ROWS_RECLUSTERED",
     }).AddRow("MY_DB", "MY_SCHEMA", "MY_TABLE", 2.5, 10240000.0, 100000.0)
     
-    mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.AUTOMATIC_CLUSTERING_HISTORY").
+    mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.AUTOMATIC_CLUSTERING_HISTORY(.+)LIMIT").
+        WithArgs(maxRowsPerQuery).
         WillReturnRows(rows)
     
     metrics := &snowflakeMetrics{}
@@ -310,6 +321,7 @@ func TestClient_QueryMetrics_ErrorHandling(t *testing.T) {
     }).AddRow("WH1", 10.5, 8.0, 2.5)
     
     mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY").
+        WithArgs(maxRowsPerQuery).
         WillReturnRows(creditRows)
     
     metrics, err := client.queryMetrics(context.Background())

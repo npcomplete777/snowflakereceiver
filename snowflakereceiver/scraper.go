@@ -33,6 +33,18 @@ func newSnowflakeScraper(settings receiver.Settings, config *Config) (*snowflake
     }, nil
 }
 
+// Shutdown closes the database connection
+func (s *snowflakeScraper) Shutdown(ctx context.Context) error {
+    s.logger.Info("Shutting down Snowflake scraper")
+    if s.client != nil {
+        if err := s.client.Close(); err != nil {
+            s.logger.Error("Failed to close Snowflake connection", zap.Error(err))
+            return err
+        }
+    }
+    return nil
+}
+
 func (s *snowflakeScraper) shouldScrape(metricName string, interval time.Duration) bool {
     lastRun, exists := s.lastRun[metricName]
     if !exists {
@@ -242,7 +254,6 @@ func (s *snowflakeScraper) buildMetrics(metrics *snowflakeMetrics) pmetric.Metri
 }
 
 // ========== INFORMATION_SCHEMA Metrics (REAL-TIME) ==========
-// Metric naming: snowflake.queries.current.* (OTel conventions)
 
 func (s *snowflakeScraper) addCurrentQueryMetrics(scopeMetrics pmetric.ScopeMetrics, queries []currentQueryRow, now pcommon.Timestamp) {
     for _, query := range queries {
@@ -375,7 +386,6 @@ func (s *snowflakeScraper) addWarehouseLoadMetrics(scopeMetrics pmetric.ScopeMet
 }
 
 // ========== ACCOUNT_USAGE Metrics (Historical) ==========
-// Metric naming: snowflake.queries.* (OTel conventions)
 
 func (s *snowflakeScraper) addQueryMetrics(scopeMetrics pmetric.ScopeMetrics, stats []queryStatRow, now pcommon.Timestamp) {
     for _, stat := range stats {
@@ -718,7 +728,7 @@ func (s *snowflakeScraper) addTaskHistoryMetrics(scopeMetrics pmetric.ScopeMetri
         }
         dp.Attributes().PutStr("data.source", "account_usage")
         
-        // Task scheduled time
+        // Task execution time
         if task.avgExecutionTime.Valid {
             schedMetric := scopeMetrics.Metrics().AppendEmpty()
             schedMetric.SetName("snowflake.tasks.execution.time")

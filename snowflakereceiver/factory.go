@@ -48,7 +48,11 @@ func createMetricsReceiver(
         InitialDelay:       interval,
     }
     
-    sc, err := scraper.NewMetrics(s.scrape)
+    // Create scraper with shutdown support
+    sc, err := scraper.NewMetrics(
+        s.scrape,
+        scraper.WithShutdown(s.Shutdown),
+    )
     if err != nil {
         return nil, err
     }
