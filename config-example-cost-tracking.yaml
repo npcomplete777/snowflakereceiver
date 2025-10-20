@@ -1,0 +1,41 @@
+# Cost Tracking Configuration
+# Focus on credits and storage with minimal data volume
+
+receivers:
+  snowflake:
+    user: "${SNOWFLAKE_USER}"
+    password: "${SNOWFLAKE_PASSWORD}"
+    account: "myorg-prod123"
+    warehouse: "COMPUTE_WH"
+    database: "SNOWFLAKE"
+    schema: "ACCOUNT_USAGE"
+    
+    # Longer interval for cost-focused monitoring
+    collection_intervals:
+      historical: "15m"                    # 15 minutes - cost data doesn't change rapidly
+    
+    # Only credit and storage metrics
+    metrics:
+      query_history: false                 # Disabled - reduces volume by ~70%
+      credit_usage: true                   # ✓ Track warehouse costs
+      storage_metrics: true                # ✓ Track storage costs
+      login_history: false                 # Disabled
+      data_pipeline: false                 # Disabled
+      database_storage: true               # ✓ Per-database breakdown
+
+processors:
+  batch:
+    timeout: 10s
+
+exporters:
+  otlphttp:
+    endpoint: "${OTLP_ENDPOINT}"
+    headers:
+      Authorization: "Bearer ${OTLP_TOKEN}"
+
+service:
+  pipelines:
+    metrics:
+      receivers: [snowflake]
+      processors: [batch]
+      exporters: [otlphttp]

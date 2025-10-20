@@ -1,0 +1,25 @@
+# Binary
+otelcol-snowflake/
+
+# Config with credentials
+config.yaml
+config-test.yaml
+config-full.yaml
+test-connection.yaml
+*-test.yaml
+*.log
+
+# Go
+*.sum
+receiver/go.sum
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
