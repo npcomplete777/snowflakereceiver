@@ -23,3 +23,6 @@ receiver/go.sum
 # OS
 .DS_Store
 Thumbs.db
+config-test-all-metrics.yaml
+config-test*.yaml
+*.log

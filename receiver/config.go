@@ -1,195 +1,373 @@
 package snowflakereceiver
 
 import (
-    "errors"
     "fmt"
     "time"
     
     "go.opentelemetry.io/collector/component"
-    "go.opentelemetry.io/collector/config/confighttp"
 )
 
+// Config represents the receiver configuration
 type Config struct {
-    confighttp.ClientConfig `mapstructure:",squash"`
-    
-    // Snowflake connection details
-    Account   string `mapstructure:"account"`
-    User      string `mapstructure:"user"`
-    Password  string `mapstructure:"password"`
-    Warehouse string `mapstructure:"warehouse"`
-    Database  string `mapstructure:"database"`
-    Schema    string `mapstructure:"schema"`
-    Role      string `mapstructure:"role"`
-    
-    // DEPRECATED: Single interval (kept for backward compatibility)
-    CollectionInterval string `mapstructure:"collection_interval"`
-    
-    // Metric category toggles with per-metric intervals
-    Metrics       MetricsConfig       `mapstructure:"metrics"`
-    EventTables   EventTablesConfig   `mapstructure:"event_tables"`
-    Organization  OrganizationConfig  `mapstructure:"organization"`
-    CustomQueries CustomQueriesConfig `mapstructure:"custom_queries"`
+    User           string                `mapstructure:"user"`
+    Password       string                `mapstructure:"password"`
+    Account        string                `mapstructure:"account"`
+    Warehouse      string                `mapstructure:"warehouse"`
+    Database       string                `mapstructure:"database"`
+    Schema         string                `mapstructure:"schema"`
+    Metrics        MetricsConfig         `mapstructure:"metrics"`
+    EventTables    EventTablesConfig     `mapstructure:"event_tables"`
+    Organization   OrganizationConfig    `mapstructure:"organization"`
+    CustomQueries  CustomQueriesConfig   `mapstructure:"custom_queries"`
 }
 
+// Metrics configuration with per-metric intervals
 type MetricsConfig struct {
-    // INFORMATION_SCHEMA metrics (REAL-TIME - no latency!)
-    CurrentQueries    MetricConfig `mapstructure:"current_queries"`
-    WarehouseLoad     MetricConfig `mapstructure:"warehouse_load"`
-    
-    // ACCOUNT_USAGE metrics (45min-3hr latency)
-    QueryHistory          MetricConfig `mapstructure:"query_history"`
-    CreditUsage           MetricConfig `mapstructure:"credit_usage"`
-    StorageMetrics        MetricConfig `mapstructure:"storage_metrics"`
-    LoginHistory          MetricConfig `mapstructure:"login_history"`
-    DataPipeline          MetricConfig `mapstructure:"data_pipeline"`
-    DatabaseStorage       MetricConfig `mapstructure:"database_storage"`
-    TaskHistory           MetricConfig `mapstructure:"task_history"`
-    ReplicationUsage      MetricConfig `mapstructure:"replication_usage"`
-    AutoClusteringHistory MetricConfig `mapstructure:"auto_clustering_history"`
+    CurrentQueries        MetricCategoryConfig `mapstructure:"current_queries"`
+    WarehouseLoad         MetricCategoryConfig `mapstructure:"warehouse_load"`
+    QueryHistory          MetricCategoryConfig `mapstructure:"query_history"`
+    CreditUsage           MetricCategoryConfig `mapstructure:"credit_usage"`
+    StorageMetrics        MetricCategoryConfig `mapstructure:"storage_metrics"`
+    LoginHistory          MetricCategoryConfig `mapstructure:"login_history"`
+    DataPipeline          MetricCategoryConfig `mapstructure:"data_pipeline"`
+    DatabaseStorage       MetricCategoryConfig `mapstructure:"database_storage"`
+    TaskHistory           MetricCategoryConfig `mapstructure:"task_history"`
+    ReplicationUsage      MetricCategoryConfig `mapstructure:"replication_usage"`
+    AutoClusteringHistory MetricCategoryConfig `mapstructure:"auto_clustering_history"`
 }
 
-// Event Tables - NEAR REAL-TIME (seconds latency!)
+type MetricCategoryConfig struct {
+    Enabled  bool   `mapstructure:"enabled"`
+    Interval string `mapstructure:"interval"`
+}
+
+func (c *MetricCategoryConfig) GetInterval(defaultInterval time.Duration) time.Duration {
+    if c.Interval == "" {
+        return defaultInterval
+    }
+    duration, err := time.ParseDuration(c.Interval)
+    if err != nil {
+        return defaultInterval
+    }
+    return duration
+}
+
+// Event Tables configuration
 type EventTablesConfig struct {
-    Enabled bool `mapstructure:"enabled"`
-    
-    // Event table name (user must create this)
-    TableName string `mapstructure:"table_name"`
-    
-    // Per-event type intervals
-    QueryLogs      MetricConfig `mapstructure:"query_logs"`
-    TaskLogs       MetricConfig `mapstructure:"task_logs"`
-    FunctionLogs   MetricConfig `mapstructure:"function_logs"`
-    ProcedureLogs  MetricConfig `mapstructure:"procedure_logs"`
+    Enabled        bool                 `mapstructure:"enabled"`
+    TableName      string               `mapstructure:"table_name"`
+    QueryLogs      MetricCategoryConfig `mapstructure:"query_logs"`
+    TaskLogs       MetricCategoryConfig `mapstructure:"task_logs"`
+    FunctionLogs   MetricCategoryConfig `mapstructure:"function_logs"`
+    ProcedureLogs  MetricCategoryConfig `mapstructure:"procedure_logs"`
 }
 
-// Organization-level metrics (multi-account)
+// Organization metrics configuration with column mapping
 type OrganizationConfig struct {
-    Enabled bool `mapstructure:"enabled"`
-    
-    // Organization metrics with intervals
-    OrgCreditUsage   MetricConfig `mapstructure:"org_credit_usage"`
-    OrgStorageUsage  MetricConfig `mapstructure:"org_storage_usage"`
-    OrgDataTransfer  MetricConfig `mapstructure:"org_data_transfer"`
-    OrgContractUsage MetricConfig `mapstructure:"org_contract_usage"`
+    Enabled           bool                       `mapstructure:"enabled"`
+    OrgCreditUsage    OrgCreditUsageConfig       `mapstructure:"org_credit_usage"`
+    OrgStorageUsage   OrgStorageUsageConfig      `mapstructure:"org_storage_usage"`
+    OrgDataTransfer   OrgDataTransferConfig      `mapstructure:"org_data_transfer"`
+    OrgContractUsage  OrgContractUsageConfig     `mapstructure:"org_contract_usage"`
 }
 
-// Custom SQL queries
+type OrgCreditUsageConfig struct {
+    Enabled  bool                    `mapstructure:"enabled"`
+    Interval string                  `mapstructure:"interval"`
+    Columns  OrgCreditUsageColumns   `mapstructure:"columns"`
+}
+
+type OrgCreditUsageColumns struct {
+    OrganizationName string `mapstructure:"organization_name"`
+    AccountName      string `mapstructure:"account_name"`
+    ServiceType      string `mapstructure:"service_type"`
+    CreditsUsed      string `mapstructure:"credits_used"`
+    UsageDate        string `mapstructure:"usage_date"`
+}
+
+func (c *OrgCreditUsageConfig) GetInterval(defaultInterval time.Duration) time.Duration {
+    if c.Interval == "" {
+        return defaultInterval
+    }
+    duration, err := time.ParseDuration(c.Interval)
+    if err != nil {
+        return defaultInterval
+    }
+    return duration
+}
+
+// Default column names for org credit usage
+func (c *OrgCreditUsageColumns) GetOrganizationName() string {
+    if c.OrganizationName != "" {
+        return c.OrganizationName
+    }
+    return "ORGANIZATION_NAME"
+}
+
+func (c *OrgCreditUsageColumns) GetAccountName() string {
+    if c.AccountName != "" {
+        return c.AccountName
+    }
+    return "ACCOUNT_NAME"
+}
+
+func (c *OrgCreditUsageColumns) GetServiceType() string {
+    if c.ServiceType != "" {
+        return c.ServiceType
+    }
+    return "SERVICE_TYPE"
+}
+
+func (c *OrgCreditUsageColumns) GetCreditsUsed() string {
+    if c.CreditsUsed != "" {
+        return c.CreditsUsed
+    }
+    return "CREDITS"
+}
+
+func (c *OrgCreditUsageColumns) GetUsageDate() string {
+    if c.UsageDate != "" {
+        return c.UsageDate
+    }
+    return "USAGE_DATE"
+}
+
+type OrgStorageUsageConfig struct {
+    Enabled  bool                      `mapstructure:"enabled"`
+    Interval string                    `mapstructure:"interval"`
+    Columns  OrgStorageUsageColumns    `mapstructure:"columns"`
+}
+
+type OrgStorageUsageColumns struct {
+    OrganizationName string `mapstructure:"organization_name"`
+    AccountName      string `mapstructure:"account_name"`
+    StorageBytes     string `mapstructure:"storage_bytes"`
+    StageBytes       string `mapstructure:"stage_bytes"`
+    FailsafeBytes    string `mapstructure:"failsafe_bytes"`
+    UsageDate        string `mapstructure:"usage_date"`
+}
+
+func (c *OrgStorageUsageConfig) GetInterval(defaultInterval time.Duration) time.Duration {
+    if c.Interval == "" {
+        return defaultInterval
+    }
+    duration, err := time.ParseDuration(c.Interval)
+    if err != nil {
+        return defaultInterval
+    }
+    return duration
+}
+
+func (c *OrgStorageUsageColumns) GetOrganizationName() string {
+    if c.OrganizationName != "" {
+        return c.OrganizationName
+    }
+    return "ORGANIZATION_NAME"
+}
+
+func (c *OrgStorageUsageColumns) GetAccountName() string {
+    if c.AccountName != "" {
+        return c.AccountName
+    }
+    return "ACCOUNT_NAME"
+}
+
+func (c *OrgStorageUsageColumns) GetStorageBytes() string {
+    if c.StorageBytes != "" {
+        return c.StorageBytes
+    }
+    return "AVERAGE_STORAGE_BYTES"
+}
+
+func (c *OrgStorageUsageColumns) GetStageBytes() string {
+    if c.StageBytes != "" {
+        return c.StageBytes
+    }
+    return "AVERAGE_STAGE_BYTES"
+}
+
+func (c *OrgStorageUsageColumns) GetFailsafeBytes() string {
+    if c.FailsafeBytes != "" {
+        return c.FailsafeBytes
+    }
+    return "AVERAGE_FAILSAFE_BYTES"
+}
+
+func (c *OrgStorageUsageColumns) GetUsageDate() string {
+    if c.UsageDate != "" {
+        return c.UsageDate
+    }
+    return "USAGE_DATE"
+}
+
+type OrgDataTransferConfig struct {
+    Enabled  bool                      `mapstructure:"enabled"`
+    Interval string                    `mapstructure:"interval"`
+    Columns  OrgDataTransferColumns    `mapstructure:"columns"`
+}
+
+type OrgDataTransferColumns struct {
+    OrganizationName  string `mapstructure:"organization_name"`
+    SourceAccountName string `mapstructure:"source_account_name"`
+    TargetAccountName string `mapstructure:"target_account_name"`
+    SourceRegion      string `mapstructure:"source_region"`
+    TargetRegion      string `mapstructure:"target_region"`
+    BytesTransferred  string `mapstructure:"bytes_transferred"`
+    TransferDate      string `mapstructure:"transfer_date"`
+}
+
+func (c *OrgDataTransferConfig) GetInterval(defaultInterval time.Duration) time.Duration {
+    if c.Interval == "" {
+        return defaultInterval
+    }
+    duration, err := time.ParseDuration(c.Interval)
+    if err != nil {
+        return defaultInterval
+    }
+    return duration
+}
+
+func (c *OrgDataTransferColumns) GetOrganizationName() string {
+    if c.OrganizationName != "" {
+        return c.OrganizationName
+    }
+    return "ORGANIZATION_NAME"
+}
+
+func (c *OrgDataTransferColumns) GetSourceAccountName() string {
+    if c.SourceAccountName != "" {
+        return c.SourceAccountName
+    }
+    return "SOURCE_ACCOUNT_NAME"
+}
+
+func (c *OrgDataTransferColumns) GetTargetAccountName() string {
+    if c.TargetAccountName != "" {
+        return c.TargetAccountName
+    }
+    return "TARGET_ACCOUNT_NAME"
+}
+
+func (c *OrgDataTransferColumns) GetSourceRegion() string {
+    if c.SourceRegion != "" {
+        return c.SourceRegion
+    }
+    return "SOURCE_REGION"
+}
+
+func (c *OrgDataTransferColumns) GetTargetRegion() string {
+    if c.TargetRegion != "" {
+        return c.TargetRegion
+    }
+    return "TARGET_REGION"
+}
+
+func (c *OrgDataTransferColumns) GetBytesTransferred() string {
+    if c.BytesTransferred != "" {
+        return c.BytesTransferred
+    }
+    return "BYTES_TRANSFERRED"
+}
+
+func (c *OrgDataTransferColumns) GetTransferDate() string {
+    if c.TransferDate != "" {
+        return c.TransferDate
+    }
+    return "TRANSFER_DATE"
+}
+
+type OrgContractUsageConfig struct {
+    Enabled  bool                       `mapstructure:"enabled"`
+    Interval string                     `mapstructure:"interval"`
+    Columns  OrgContractUsageColumns    `mapstructure:"columns"`
+}
+
+type OrgContractUsageColumns struct {
+    OrganizationName string `mapstructure:"organization_name"`
+    ContractNumber   string `mapstructure:"contract_number"`
+    CreditsUsed      string `mapstructure:"credits_used"`
+    CreditsBilled    string `mapstructure:"credits_billed"`
+    UsageDate        string `mapstructure:"usage_date"`
+}
+
+func (c *OrgContractUsageConfig) GetInterval(defaultInterval time.Duration) time.Duration {
+    if c.Interval == "" {
+        return defaultInterval
+    }
+    duration, err := time.ParseDuration(c.Interval)
+    if err != nil {
+        return defaultInterval
+    }
+    return duration
+}
+
+func (c *OrgContractUsageColumns) GetOrganizationName() string {
+    if c.OrganizationName != "" {
+        return c.OrganizationName
+    }
+    return "ORGANIZATION_NAME"
+}
+
+func (c *OrgContractUsageColumns) GetContractNumber() string {
+    if c.ContractNumber != "" {
+        return c.ContractNumber
+    }
+    return "CONTRACT_NUMBER"
+}
+
+func (c *OrgContractUsageColumns) GetCreditsUsed() string {
+    if c.CreditsUsed != "" {
+        return c.CreditsUsed
+    }
+    return "CREDITS_USED"
+}
+
+func (c *OrgContractUsageColumns) GetCreditsBilled() string {
+    if c.CreditsBilled != "" {
+        return c.CreditsBilled
+    }
+    return "CREDITS_BILLED"
+}
+
+func (c *OrgContractUsageColumns) GetUsageDate() string {
+    if c.UsageDate != "" {
+        return c.UsageDate
+    }
+    return "USAGE_DATE"
+}
+
+// Custom queries configuration
 type CustomQueriesConfig struct {
     Enabled bool          `mapstructure:"enabled"`
     Queries []CustomQuery `mapstructure:"queries"`
 }
 
 type CustomQuery struct {
-    Name        string `mapstructure:"name"`
-    SQL         string `mapstructure:"sql"`
-    Interval    string `mapstructure:"interval"`
-    MetricType  string `mapstructure:"metric_type"`  // gauge, counter, histogram
-    ValueColumn string `mapstructure:"value_column"`
+    Name         string   `mapstructure:"name"`
+    Interval     string   `mapstructure:"interval"`
+    MetricType   string   `mapstructure:"metric_type"`
+    ValueColumn  string   `mapstructure:"value_column"`
     LabelColumns []string `mapstructure:"label_columns"`
+    SQL          string   `mapstructure:"sql"`
 }
 
-type MetricConfig struct {
-    Enabled  bool   `mapstructure:"enabled"`
-    Interval string `mapstructure:"interval"`
+func (q *CustomQuery) GetInterval(defaultInterval time.Duration) time.Duration {
+    if q.Interval == "" {
+        return defaultInterval
+    }
+    duration, err := time.ParseDuration(q.Interval)
+    if err != nil {
+        return defaultInterval
+    }
+    return duration
 }
 
-func (cfg *Config) Validate() error {
-    if cfg.Account == "" {
-        return errors.New("account is required")
-    }
-    if cfg.User == "" {
-        return errors.New("user is required")
-    }
-    if cfg.Password == "" {
-        return errors.New("password is required")
-    }
-    if cfg.Warehouse == "" {
-        return errors.New("warehouse is required")
-    }
-    if cfg.Database == "" {
-        return errors.New("database is required")
-    }
-    
-    // Validate Event Tables config
-    if cfg.EventTables.Enabled && cfg.EventTables.TableName == "" {
-        return errors.New("event_tables.table_name is required when event_tables.enabled is true")
-    }
-    
-    // Validate custom queries
-    if cfg.CustomQueries.Enabled {
-        for i, query := range cfg.CustomQueries.Queries {
-            if query.Name == "" {
-                return fmt.Errorf("custom_queries[%d].name is required", i)
-            }
-            if query.SQL == "" {
-                return fmt.Errorf("custom_queries[%d].sql is required", i)
-            }
-            if query.ValueColumn == "" {
-                return fmt.Errorf("custom_queries[%d].value_column is required", i)
-            }
-            if query.MetricType != "" && query.MetricType != "gauge" && query.MetricType != "counter" && query.MetricType != "histogram" {
-                return fmt.Errorf("custom_queries[%d].metric_type must be gauge, counter, or histogram", i)
-            }
-        }
-    }
-    
-    // Validate intervals for enabled metrics
-    allMetrics := make(map[string]MetricConfig)
-    
-    // Standard metrics
-    allMetrics["current_queries"] = cfg.Metrics.CurrentQueries
-    allMetrics["warehouse_load"] = cfg.Metrics.WarehouseLoad
-    allMetrics["query_history"] = cfg.Metrics.QueryHistory
-    allMetrics["credit_usage"] = cfg.Metrics.CreditUsage
-    allMetrics["storage_metrics"] = cfg.Metrics.StorageMetrics
-    allMetrics["login_history"] = cfg.Metrics.LoginHistory
-    allMetrics["data_pipeline"] = cfg.Metrics.DataPipeline
-    allMetrics["database_storage"] = cfg.Metrics.DatabaseStorage
-    allMetrics["task_history"] = cfg.Metrics.TaskHistory
-    allMetrics["replication_usage"] = cfg.Metrics.ReplicationUsage
-    allMetrics["auto_clustering_history"] = cfg.Metrics.AutoClusteringHistory
-    
-    // Event Tables metrics
-    if cfg.EventTables.Enabled {
-        allMetrics["event_query_logs"] = cfg.EventTables.QueryLogs
-        allMetrics["event_task_logs"] = cfg.EventTables.TaskLogs
-        allMetrics["event_function_logs"] = cfg.EventTables.FunctionLogs
-        allMetrics["event_procedure_logs"] = cfg.EventTables.ProcedureLogs
-    }
-    
-    // Organization metrics
-    if cfg.Organization.Enabled {
-        allMetrics["org_credit_usage"] = cfg.Organization.OrgCreditUsage
-        allMetrics["org_storage_usage"] = cfg.Organization.OrgStorageUsage
-        allMetrics["org_data_transfer"] = cfg.Organization.OrgDataTransfer
-        allMetrics["org_contract_usage"] = cfg.Organization.OrgContractUsage
-    }
-    
-    for name, metric := range allMetrics {
-        if metric.Enabled && metric.Interval != "" {
-            if _, err := time.ParseDuration(metric.Interval); err != nil {
-                return fmt.Errorf("invalid interval for %s: %w", name, err)
-            }
-        }
-    }
-    
-    return nil
-}
 
-func (mc *MetricConfig) GetInterval(defaultInterval time.Duration) time.Duration {
-    if mc.Interval != "" {
-        d, err := time.ParseDuration(mc.Interval)
-        if err == nil {
-            return d
-        }
-    }
-    return defaultInterval
-}
-
+// GetBaseInterval returns the minimum interval across all enabled metrics
 func (cfg *Config) GetBaseInterval() time.Duration {
-    minInterval := 30 * time.Second // Event Tables can be very fast
+    minInterval := 30 * time.Second
     
-    allMetrics := []MetricConfig{
+    allMetrics := []MetricCategoryConfig{
         cfg.Metrics.CurrentQueries,
         cfg.Metrics.WarehouseLoad,
         cfg.Metrics.QueryHistory,
@@ -214,10 +392,10 @@ func (cfg *Config) GetBaseInterval() time.Duration {
     
     if cfg.Organization.Enabled {
         allMetrics = append(allMetrics,
-            cfg.Organization.OrgCreditUsage,
-            cfg.Organization.OrgStorageUsage,
-            cfg.Organization.OrgDataTransfer,
-            cfg.Organization.OrgContractUsage,
+            cfg.Organization.OrgCreditUsage.MetricCategoryConfig(),
+            cfg.Organization.OrgStorageUsage.MetricCategoryConfig(),
+            cfg.Organization.OrgDataTransfer.MetricCategoryConfig(),
+            cfg.Organization.OrgContractUsage.MetricCategoryConfig(),
         )
     }
     
@@ -233,42 +411,91 @@ func (cfg *Config) GetBaseInterval() time.Duration {
     return minInterval
 }
 
+// Helper methods to convert org configs to MetricCategoryConfig
+func (c *OrgCreditUsageConfig) MetricCategoryConfig() MetricCategoryConfig {
+    return MetricCategoryConfig{Enabled: c.Enabled, Interval: c.Interval}
+}
+
+func (c *OrgStorageUsageConfig) MetricCategoryConfig() MetricCategoryConfig {
+    return MetricCategoryConfig{Enabled: c.Enabled, Interval: c.Interval}
+}
+
+func (c *OrgDataTransferConfig) MetricCategoryConfig() MetricCategoryConfig {
+    return MetricCategoryConfig{Enabled: c.Enabled, Interval: c.Interval}
+}
+
+func (c *OrgContractUsageConfig) MetricCategoryConfig() MetricCategoryConfig {
+    return MetricCategoryConfig{Enabled: c.Enabled, Interval: c.Interval}
+}
+
+// createDefaultConfig creates the default configuration
 func createDefaultConfig() component.Config {
     return &Config{
-        ClientConfig: confighttp.NewDefaultClientConfig(),
-        Schema:       "ACCOUNT_USAGE",
-        Role:         "ACCOUNTADMIN",
+        Database: "SNOWFLAKE",
+        Schema:   "ACCOUNT_USAGE",
         Metrics: MetricsConfig{
-            CurrentQueries: MetricConfig{Enabled: true, Interval: "1m"},
-            WarehouseLoad:  MetricConfig{Enabled: true, Interval: "1m"},
-            QueryHistory:   MetricConfig{Enabled: true, Interval: "5m"},
-            CreditUsage:    MetricConfig{Enabled: true, Interval: "5m"},
-            StorageMetrics: MetricConfig{Enabled: true, Interval: "30m"},
-            LoginHistory:   MetricConfig{Enabled: true, Interval: "10m"},
-            DataPipeline:   MetricConfig{Enabled: true, Interval: "10m"},
-            DatabaseStorage: MetricConfig{Enabled: true, Interval: "30m"},
-            TaskHistory:    MetricConfig{Enabled: true, Interval: "10m"},
-            ReplicationUsage: MetricConfig{Enabled: true, Interval: "15m"},
-            AutoClusteringHistory: MetricConfig{Enabled: true, Interval: "15m"},
+            CurrentQueries:        MetricCategoryConfig{Enabled: true, Interval: "1m"},
+            WarehouseLoad:         MetricCategoryConfig{Enabled: true, Interval: "1m"},
+            QueryHistory:          MetricCategoryConfig{Enabled: true, Interval: "5m"},
+            CreditUsage:           MetricCategoryConfig{Enabled: true, Interval: "5m"},
+            StorageMetrics:        MetricCategoryConfig{Enabled: true, Interval: "30m"},
+            LoginHistory:          MetricCategoryConfig{Enabled: true, Interval: "10m"},
+            DataPipeline:          MetricCategoryConfig{Enabled: true, Interval: "10m"},
+            DatabaseStorage:       MetricCategoryConfig{Enabled: true, Interval: "30m"},
+            TaskHistory:           MetricCategoryConfig{Enabled: true, Interval: "10m"},
+            ReplicationUsage:      MetricCategoryConfig{Enabled: true, Interval: "15m"},
+            AutoClusteringHistory: MetricCategoryConfig{Enabled: true, Interval: "15m"},
         },
         EventTables: EventTablesConfig{
-            Enabled:   false, // Must be explicitly enabled
-            TableName: "",
-            QueryLogs:      MetricConfig{Enabled: true, Interval: "30s"},
-            TaskLogs:       MetricConfig{Enabled: true, Interval: "30s"},
-            FunctionLogs:   MetricConfig{Enabled: true, Interval: "30s"},
-            ProcedureLogs:  MetricConfig{Enabled: true, Interval: "30s"},
+            Enabled:       false,
+            QueryLogs:     MetricCategoryConfig{Enabled: true, Interval: "30s"},
+            TaskLogs:      MetricCategoryConfig{Enabled: true, Interval: "30s"},
+            FunctionLogs:  MetricCategoryConfig{Enabled: true, Interval: "30s"},
+            ProcedureLogs: MetricCategoryConfig{Enabled: true, Interval: "30s"},
         },
         Organization: OrganizationConfig{
-            Enabled: false, // Must be explicitly enabled
-            OrgCreditUsage:   MetricConfig{Enabled: true, Interval: "1h"},
-            OrgStorageUsage:  MetricConfig{Enabled: true, Interval: "1h"},
-            OrgDataTransfer:  MetricConfig{Enabled: true, Interval: "1h"},
-            OrgContractUsage: MetricConfig{Enabled: true, Interval: "12h"},
+            Enabled: false,
+            OrgCreditUsage: OrgCreditUsageConfig{
+                Enabled:  true,
+                Interval: "1h",
+                Columns:  OrgCreditUsageColumns{},
+            },
+            OrgStorageUsage: OrgStorageUsageConfig{
+                Enabled:  true,
+                Interval: "1h",
+                Columns:  OrgStorageUsageColumns{},
+            },
+            OrgDataTransfer: OrgDataTransferConfig{
+                Enabled:  true,
+                Interval: "1h",
+                Columns:  OrgDataTransferColumns{},
+            },
+            OrgContractUsage: OrgContractUsageConfig{
+                Enabled:  true,
+                Interval: "12h",
+                Columns:  OrgContractUsageColumns{},
+            },
         },
         CustomQueries: CustomQueriesConfig{
             Enabled: false,
             Queries: []CustomQuery{},
         },
     }
+}
+
+// Validate validates the configuration
+func (cfg *Config) Validate() error {
+    if cfg.User == "" {
+        return fmt.Errorf("user is required")
+    }
+    if cfg.Password == "" {
+        return fmt.Errorf("password is required")
+    }
+    if cfg.Account == "" {
+        return fmt.Errorf("account is required")
+    }
+    if cfg.Warehouse == "" {
+        return fmt.Errorf("warehouse is required")
+    }
+    return nil
 }

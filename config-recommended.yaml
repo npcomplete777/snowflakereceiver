@@ -1,3 +1,13 @@
+# ============================================================================
+# RECOMMENDED STARTER CONFIG - Use this for production!
+# ============================================================================
+# This config enables ALL 11 metric categories (300+ metrics) with optimized
+# polling intervals. Works out-of-the-box with any Snowflake account.
+#
+# Performance: ~86K metrics/day with default intervals
+# Latency: Real-time (1min) for operations, historical (5-30min) for trends
+# ============================================================================
+
 receivers:
   snowflake:
     user: "YOUR_SNOWFLAKE_USER"

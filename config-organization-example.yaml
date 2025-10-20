@@ -1,3 +1,17 @@
+# ============================================================================
+# ORGANIZATION METRICS EXAMPLE - Multi-Account Monitoring
+# ============================================================================
+# Monitor across multiple Snowflake accounts in your organization.
+# Requires ORGADMIN role and Enterprise edition.
+#
+# IMPORTANT: Column names vary by Snowflake version!
+# If you get "invalid identifier" errors, find your actual column names:
+#
+#   DESCRIBE TABLE SNOWFLAKE.ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY;
+#
+# Then configure custom column names below in the "columns:" sections.
+# ============================================================================
+
 receivers:
   snowflake:
     user: "YOUR_SNOWFLAKE_USER"
@@ -81,3 +95,22 @@ service:
       receivers: [snowflake]
       processors: [batch]
       exporters: [otlphttp]
+
+# ============================================================================
+# COLUMN MAPPING EXAMPLE (if default names don't work)
+# ============================================================================
+# Uncomment and adjust if you get "invalid identifier" errors:
+#
+#     organization:
+#       enabled: true
+#       org_credit_usage:
+#         enabled: true
+#         interval: "1h"
+#         columns:
+#           organization_name: "ORG_NAME"           # Your actual column
+#           account_name: "ACCOUNT_ID"              # Your actual column
+#           service_type: "SERVICE"                 # Your actual column
+#           credits_used: "CREDITS_CONSUMED"        # Your actual column
+#           usage_date: "DATE"                      # Your actual column
+#
+# Run DESCRIBE TABLE to find exact column names for your Snowflake version.

@@ -1,3 +1,16 @@
+# ============================================================================
+# EVENT TABLES EXAMPLE - SECONDS-LEVEL LATENCY! 🔥
+# ============================================================================
+# Event Tables provide near real-time monitoring (seconds vs 45min-3hr).
+# Requires Event Table setup in Snowflake first.
+#
+# Setup in Snowflake:
+#   CREATE EVENT TABLE SNOWFLAKE.PUBLIC.MY_EVENT_TABLE;
+#   ALTER SESSION SET EVENT_TABLE = 'SNOWFLAKE.PUBLIC.MY_EVENT_TABLE';
+#
+# Use for: Real-time alerting, operational monitoring, error detection
+# ============================================================================
+
 receivers:
   snowflake:
     user: "YOUR_SNOWFLAKE_USER"

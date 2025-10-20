@@ -1,3 +1,15 @@
+# ============================================================================
+# CUSTOM QUERIES EXAMPLE - Define your own metrics!
+# ============================================================================
+# Use this when you need metrics beyond the 300+ built-in ones.
+# Write any SQL query and export as OpenTelemetry metrics.
+#
+# Use cases:
+# - Cost analysis (query cost by user/warehouse)
+# - Performance tracking (table scan efficiency)
+# - Security monitoring (failed login patterns)
+# ============================================================================
+
 receivers:
   snowflake:
     user: "YOUR_SNOWFLAKE_USER"
