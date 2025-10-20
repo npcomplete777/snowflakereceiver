@@ -30,6 +30,17 @@ type Config struct {
     CustomQueries  CustomQueriesConfig   `mapstructure:"custom_queries"`
 }
 
+// SanitizedDSN returns a DSN string with the password redacted for safe logging
+func (cfg *Config) SanitizedDSN() string {
+    return fmt.Sprintf("%s:***@%s/%s/%s?warehouse=%s",
+        cfg.User,
+        cfg.Account,
+        cfg.Database,
+        cfg.Schema,
+        cfg.Warehouse,
+    )
+}
+
 // Metrics configuration with per-metric intervals
 type MetricsConfig struct {
     CurrentQueries        MetricCategoryConfig `mapstructure:"current_queries"`

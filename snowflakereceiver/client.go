@@ -220,6 +220,7 @@ func (c *snowflakeClient) connect(ctx context.Context) error {
     connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
     defer cancel()
     
+    // Build actual DSN with password (for connection only, never logged)
     dsn := fmt.Sprintf("%s:%s@%s/%s/%s?warehouse=%s",
         c.config.User,
         c.config.Password,
@@ -231,6 +232,10 @@ func (c *snowflakeClient) connect(ctx context.Context) error {
     
     db, err := sql.Open("snowflake", dsn)
     if err != nil {
+        // Use sanitized DSN for error logging
+        c.logger.Error("Failed to open Snowflake connection",
+            zap.String("dsn", c.config.SanitizedDSN()),
+            zap.Error(err))
         return fmt.Errorf("failed to open Snowflake connection: %w", err)
     }
     
@@ -241,13 +246,17 @@ func (c *snowflakeClient) connect(ctx context.Context) error {
     
     if err := db.PingContext(connectCtx); err != nil {
         db.Close()
+        // Use sanitized DSN for error logging
+        c.logger.Error("Failed to ping Snowflake",
+            zap.String("dsn", c.config.SanitizedDSN()),
+            zap.Error(err))
         return fmt.Errorf("failed to ping Snowflake: %w", err)
     }
     
     c.db = db
+    // Use sanitized DSN for success logging
     c.logger.Info("Successfully connected to Snowflake",
-        zap.String("account", c.config.Account),
-        zap.String("warehouse", c.config.Warehouse),
+        zap.String("dsn", c.config.SanitizedDSN()),
         zap.Int("rate_limit_qps", c.config.GetRateLimitQPS()))
     return nil
 }
@@ -475,7 +484,17 @@ func (c *snowflakeClient) queryCurrentQueries(ctx context.Context, metrics *snow
     }
     defer rows.Close()
     
+    maxRows := c.config.GetMaxRowsPerQuery()
+    rowCount := 0
+    
     for rows.Next() {
+        if rowCount >= maxRows {
+            c.logger.Warn("Query result truncated at max rows",
+                zap.String("query", "current_queries"),
+                zap.Int("max_rows", maxRows))
+            break
+        }
+        
         var row currentQueryRow
         if err := rows.Scan(
             &row.warehouseName,
@@ -488,6 +507,7 @@ func (c *snowflakeClient) queryCurrentQueries(ctx context.Context, metrics *snow
             return fmt.Errorf("failed to scan current query row: %w", err)
         }
         metrics.currentQueries = append(metrics.currentQueries, row)
+        rowCount++
     }
     
     return rows.Err()
@@ -513,7 +533,17 @@ func (c *snowflakeClient) queryWarehouseLoad(ctx context.Context, metrics *snowf
     }
     defer rows.Close()
     
+    maxRows := c.config.GetMaxRowsPerQuery()
+    rowCount := 0
+    
     for rows.Next() {
+        if rowCount >= maxRows {
+            c.logger.Warn("Query result truncated at max rows",
+                zap.String("query", "warehouse_load"),
+                zap.Int("max_rows", maxRows))
+            break
+        }
+        
         var row warehouseLoadRow
         if err := rows.Scan(
             &row.warehouseName,
@@ -525,6 +555,7 @@ func (c *snowflakeClient) queryWarehouseLoad(ctx context.Context, metrics *snowf
             return fmt.Errorf("failed to scan warehouse load row: %w", err)
         }
         metrics.warehouseLoad = append(metrics.warehouseLoad, row)
+        rowCount++
     }
     
     return rows.Err()
@@ -554,7 +585,17 @@ func (c *snowflakeClient) queryQueryHistory(ctx context.Context, metrics *snowfl
     }
     defer rows.Close()
     
+    maxRows := c.config.GetMaxRowsPerQuery()
+    rowCount := 0
+    
     for rows.Next() {
+        if rowCount >= maxRows {
+            c.logger.Warn("Query result truncated at max rows",
+                zap.String("query", "query_history"),
+                zap.Int("max_rows", maxRows))
+            break
+        }
+        
         var row queryStatRow
         if err := rows.Scan(
             &row.warehouseName,
@@ -570,6 +611,7 @@ func (c *snowflakeClient) queryQueryHistory(ctx context.Context, metrics *snowfl
             return fmt.Errorf("failed to scan query history row: %w", err)
         }
         metrics.queryStats = append(metrics.queryStats, row)
+        rowCount++
     }
     
     return rows.Err()
@@ -594,7 +636,17 @@ func (c *snowflakeClient) queryCreditUsage(ctx context.Context, metrics *snowfla
     }
     defer rows.Close()
     
+    maxRows := c.config.GetMaxRowsPerQuery()
+    rowCount := 0
+    
     for rows.Next() {
+        if rowCount >= maxRows {
+            c.logger.Warn("Query result truncated at max rows",
+                zap.String("query", "credit_usage"),
+                zap.Int("max_rows", maxRows))
+            break
+        }
+        
         var row creditUsageRow
         if err := rows.Scan(
             &row.warehouseName,
@@ -605,6 +657,7 @@ func (c *snowflakeClient) queryCreditUsage(ctx context.Context, metrics *snowfla
             return fmt.Errorf("failed to scan credit usage row: %w", err)
         }
         metrics.creditUsage = append(metrics.creditUsage, row)
+        rowCount++
     }
     
     return rows.Err()
@@ -659,7 +712,17 @@ func (c *snowflakeClient) queryLoginHistory(ctx context.Context, metrics *snowfl
     }
     defer rows.Close()
     
+    maxRows := c.config.GetMaxRowsPerQuery()
+    rowCount := 0
+    
     for rows.Next() {
+        if rowCount >= maxRows {
+            c.logger.Warn("Query result truncated at max rows",
+                zap.String("query", "login_history"),
+                zap.Int("max_rows", maxRows))
+            break
+        }
+        
         var row loginHistoryRow
         if err := rows.Scan(
             &row.isSuccess,
@@ -669,6 +732,7 @@ func (c *snowflakeClient) queryLoginHistory(ctx context.Context, metrics *snowfl
             return fmt.Errorf("failed to scan login history row: %w", err)
         }
         metrics.loginHistory = append(metrics.loginHistory, row)
+        rowCount++
     }
     
     return rows.Err()
@@ -693,7 +757,17 @@ func (c *snowflakeClient) queryPipeUsage(ctx context.Context, metrics *snowflake
     }
     defer rows.Close()
     
+    maxRows := c.config.GetMaxRowsPerQuery()
+    rowCount := 0
+    
     for rows.Next() {
+        if rowCount >= maxRows {
+            c.logger.Warn("Query result truncated at max rows",
+                zap.String("query", "pipe_usage"),
+                zap.Int("max_rows", maxRows))
+            break
+        }
+        
         var row pipeUsageRow
         if err := rows.Scan(
             &row.pipeName,
@@ -704,6 +778,7 @@ func (c *snowflakeClient) queryPipeUsage(ctx context.Context, metrics *snowflake
             return fmt.Errorf("failed to scan pipe usage row: %w", err)
         }
         metrics.pipeUsage = append(metrics.pipeUsage, row)
+        rowCount++
     }
     
     return rows.Err()
@@ -727,7 +802,17 @@ func (c *snowflakeClient) queryDatabaseStorage(ctx context.Context, metrics *sno
     }
     defer rows.Close()
     
+    maxRows := c.config.GetMaxRowsPerQuery()
+    rowCount := 0
+    
     for rows.Next() {
+        if rowCount >= maxRows {
+            c.logger.Warn("Query result truncated at max rows",
+                zap.String("query", "database_storage"),
+                zap.Int("max_rows", maxRows))
+            break
+        }
+        
         var row databaseStorageRow
         if err := rows.Scan(
             &row.databaseName,
@@ -737,6 +822,7 @@ func (c *snowflakeClient) queryDatabaseStorage(ctx context.Context, metrics *sno
             return fmt.Errorf("failed to scan database storage row: %w", err)
         }
         metrics.databaseStorage = append(metrics.databaseStorage, row)
+        rowCount++
     }
     
     return rows.Err()
@@ -764,7 +850,17 @@ func (c *snowflakeClient) queryTaskHistory(ctx context.Context, metrics *snowfla
     }
     defer rows.Close()
     
+    maxRows := c.config.GetMaxRowsPerQuery()
+    rowCount := 0
+    
     for rows.Next() {
+        if rowCount >= maxRows {
+            c.logger.Warn("Query result truncated at max rows",
+                zap.String("query", "task_history"),
+                zap.Int("max_rows", maxRows))
+            break
+        }
+        
         var row taskHistoryRow
         if err := rows.Scan(
             &row.databaseName,
@@ -777,6 +873,7 @@ func (c *snowflakeClient) queryTaskHistory(ctx context.Context, metrics *snowfla
             return fmt.Errorf("failed to scan task history row: %w", err)
         }
         metrics.taskHistory = append(metrics.taskHistory, row)
+        rowCount++
     }
     
     return rows.Err()
@@ -800,7 +897,17 @@ func (c *snowflakeClient) queryReplicationUsage(ctx context.Context, metrics *sn
     }
     defer rows.Close()
     
+    maxRows := c.config.GetMaxRowsPerQuery()
+    rowCount := 0
+    
     for rows.Next() {
+        if rowCount >= maxRows {
+            c.logger.Warn("Query result truncated at max rows",
+                zap.String("query", "replication_usage"),
+                zap.Int("max_rows", maxRows))
+            break
+        }
+        
         var row replicationUsageRow
         if err := rows.Scan(
             &row.databaseName,
@@ -810,6 +917,7 @@ func (c *snowflakeClient) queryReplicationUsage(ctx context.Context, metrics *sn
             return fmt.Errorf("failed to scan replication usage row: %w", err)
         }
         metrics.replicationUsage = append(metrics.replicationUsage, row)
+        rowCount++
     }
     
     return rows.Err()
@@ -836,7 +944,17 @@ func (c *snowflakeClient) queryAutoClusteringHistory(ctx context.Context, metric
     }
     defer rows.Close()
     
+    maxRows := c.config.GetMaxRowsPerQuery()
+    rowCount := 0
+    
     for rows.Next() {
+        if rowCount >= maxRows {
+            c.logger.Warn("Query result truncated at max rows",
+                zap.String("query", "auto_clustering"),
+                zap.Int("max_rows", maxRows))
+            break
+        }
+        
         var row autoClusteringRow
         if err := rows.Scan(
             &row.databaseName,
@@ -849,6 +967,7 @@ func (c *snowflakeClient) queryAutoClusteringHistory(ctx context.Context, metric
             return fmt.Errorf("failed to scan auto-clustering row: %w", err)
         }
         metrics.autoClusteringHistory = append(metrics.autoClusteringHistory, row)
+        rowCount++
     }
     
     return rows.Err()
@@ -890,7 +1009,17 @@ func (c *snowflakeClient) queryEventTableLogs(ctx context.Context, metrics *snow
     defer rows.Close()
     
     var events []eventTableRow
+    maxRows := c.config.GetMaxRowsPerQuery()
+    rowCount := 0
+    
     for rows.Next() {
+        if rowCount >= maxRows {
+            c.logger.Warn("Query result truncated at max rows",
+                zap.String("query", "event_table_"+eventType),
+                zap.Int("max_rows", maxRows))
+            break
+        }
+        
         var row eventTableRow
         if err := rows.Scan(
             &row.eventType,
@@ -900,6 +1029,7 @@ func (c *snowflakeClient) queryEventTableLogs(ctx context.Context, metrics *snow
             return fmt.Errorf("failed to scan event table row: %w", err)
         }
         events = append(events, row)
+        rowCount++
     }
     
     switch eventType {
@@ -959,7 +1089,17 @@ func (c *snowflakeClient) queryOrgCreditUsage(ctx context.Context, metrics *snow
     }
     defer rows.Close()
     
+    maxRows := c.config.GetMaxRowsPerQuery()
+    rowCount := 0
+    
     for rows.Next() {
+        if rowCount >= maxRows {
+            c.logger.Warn("Query result truncated at max rows",
+                zap.String("query", "org_credit_usage"),
+                zap.Int("max_rows", maxRows))
+            break
+        }
+        
         var row orgCreditUsageRow
         if err := rows.Scan(
             &row.organizationName,
@@ -970,6 +1110,7 @@ func (c *snowflakeClient) queryOrgCreditUsage(ctx context.Context, metrics *snow
             return fmt.Errorf("failed to scan org credit usage row: %w", err)
         }
         metrics.orgCreditUsage = append(metrics.orgCreditUsage, row)
+        rowCount++
     }
     
     return rows.Err()
@@ -1020,7 +1161,17 @@ func (c *snowflakeClient) queryOrgStorageUsage(ctx context.Context, metrics *sno
     }
     defer rows.Close()
     
+    maxRows := c.config.GetMaxRowsPerQuery()
+    rowCount := 0
+    
     for rows.Next() {
+        if rowCount >= maxRows {
+            c.logger.Warn("Query result truncated at max rows",
+                zap.String("query", "org_storage_usage"),
+                zap.Int("max_rows", maxRows))
+            break
+        }
+        
         var row orgStorageUsageRow
         if err := rows.Scan(
             &row.organizationName,
@@ -1032,6 +1183,7 @@ func (c *snowflakeClient) queryOrgStorageUsage(ctx context.Context, metrics *sno
             return fmt.Errorf("failed to scan org storage usage row: %w", err)
         }
         metrics.orgStorageUsage = append(metrics.orgStorageUsage, row)
+        rowCount++
     }
     
     return rows.Err()
@@ -1088,7 +1240,17 @@ func (c *snowflakeClient) queryOrgDataTransfer(ctx context.Context, metrics *sno
     }
     defer rows.Close()
     
+    maxRows := c.config.GetMaxRowsPerQuery()
+    rowCount := 0
+    
     for rows.Next() {
+        if rowCount >= maxRows {
+            c.logger.Warn("Query result truncated at max rows",
+                zap.String("query", "org_data_transfer"),
+                zap.Int("max_rows", maxRows))
+            break
+        }
+        
         var row orgDataTransferRow
         if err := rows.Scan(
             &row.organizationName,
@@ -1101,6 +1263,7 @@ func (c *snowflakeClient) queryOrgDataTransfer(ctx context.Context, metrics *sno
             return fmt.Errorf("failed to scan org data transfer row: %w", err)
         }
         metrics.orgDataTransfer = append(metrics.orgDataTransfer, row)
+        rowCount++
     }
     
     return rows.Err()
@@ -1148,7 +1311,17 @@ func (c *snowflakeClient) queryOrgContractUsage(ctx context.Context, metrics *sn
     }
     defer rows.Close()
     
+    maxRows := c.config.GetMaxRowsPerQuery()
+    rowCount := 0
+    
     for rows.Next() {
+        if rowCount >= maxRows {
+            c.logger.Warn("Query result truncated at max rows",
+                zap.String("query", "org_contract_usage"),
+                zap.Int("max_rows", maxRows))
+            break
+        }
+        
         var row orgContractUsageRow
         if err := rows.Scan(
             &row.organizationName,
@@ -1159,6 +1332,7 @@ func (c *snowflakeClient) queryOrgContractUsage(ctx context.Context, metrics *sn
             return fmt.Errorf("failed to scan org contract usage row: %w", err)
         }
         metrics.orgContractUsage = append(metrics.orgContractUsage, row)
+        rowCount++
     }
     
     return rows.Err()
