@@ -1,6 +1,6 @@
 module github.com/npcomplete777/snowflakereceiver/snowflakereceiver
 
-go 1.24
+go 1.24.0
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
@@ -15,6 +15,7 @@ require (
 	go.opentelemetry.io/collector/scraper v0.135.0
 	go.opentelemetry.io/collector/scraper/scraperhelper v0.135.0
 	go.uber.org/zap v1.27.0
+	golang.org/x/time v0.14.0
 )
 
 require (
