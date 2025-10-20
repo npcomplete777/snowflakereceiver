@@ -15,6 +15,15 @@ type Config struct {
     Warehouse      string                `mapstructure:"warehouse"`
     Database       string                `mapstructure:"database"`
     Schema         string                `mapstructure:"schema"`
+    
+    // Security and reliability settings
+    QueryTimeout       string `mapstructure:"query_timeout"`        // Default: "30s"
+    MaxRowsPerQuery    int    `mapstructure:"max_rows_per_query"`   // Default: 10000
+    RateLimitQPS       int    `mapstructure:"rate_limit_qps"`       // Default: 10
+    MaxRetries         int    `mapstructure:"max_retries"`          // Default: 3
+    RetryInitialDelay  string `mapstructure:"retry_initial_delay"`  // Default: "1s"
+    RetryMaxDelay      string `mapstructure:"retry_max_delay"`      // Default: "30s"
+    
     Metrics        MetricsConfig         `mapstructure:"metrics"`
     EventTables    EventTablesConfig     `mapstructure:"event_tables"`
     Organization   OrganizationConfig    `mapstructure:"organization"`
@@ -362,6 +371,65 @@ func (q *CustomQuery) GetInterval(defaultInterval time.Duration) time.Duration {
     return duration
 }
 
+// GetQueryTimeout returns the parsed query timeout duration
+func (cfg *Config) GetQueryTimeout() time.Duration {
+    if cfg.QueryTimeout == "" {
+        return 30 * time.Second
+    }
+    duration, err := time.ParseDuration(cfg.QueryTimeout)
+    if err != nil {
+        return 30 * time.Second
+    }
+    return duration
+}
+
+// GetMaxRowsPerQuery returns the max rows per query
+func (cfg *Config) GetMaxRowsPerQuery() int {
+    if cfg.MaxRowsPerQuery <= 0 {
+        return 10000
+    }
+    return cfg.MaxRowsPerQuery
+}
+
+// GetRateLimitQPS returns the rate limit in queries per second
+func (cfg *Config) GetRateLimitQPS() int {
+    if cfg.RateLimitQPS <= 0 {
+        return 10
+    }
+    return cfg.RateLimitQPS
+}
+
+// GetMaxRetries returns the maximum number of retries
+func (cfg *Config) GetMaxRetries() int {
+    if cfg.MaxRetries <= 0 {
+        return 3
+    }
+    return cfg.MaxRetries
+}
+
+// GetRetryInitialDelay returns the initial retry delay
+func (cfg *Config) GetRetryInitialDelay() time.Duration {
+    if cfg.RetryInitialDelay == "" {
+        return 1 * time.Second
+    }
+    duration, err := time.ParseDuration(cfg.RetryInitialDelay)
+    if err != nil {
+        return 1 * time.Second
+    }
+    return duration
+}
+
+// GetRetryMaxDelay returns the maximum retry delay
+func (cfg *Config) GetRetryMaxDelay() time.Duration {
+    if cfg.RetryMaxDelay == "" {
+        return 30 * time.Second
+    }
+    duration, err := time.ParseDuration(cfg.RetryMaxDelay)
+    if err != nil {
+        return 30 * time.Second
+    }
+    return duration
+}
 
 // GetBaseInterval returns the minimum interval across all enabled metrics
 func (cfg *Config) GetBaseInterval() time.Duration {
@@ -433,6 +501,15 @@ func createDefaultConfig() component.Config {
     return &Config{
         Database: "SNOWFLAKE",
         Schema:   "ACCOUNT_USAGE",
+        
+        // Security and reliability defaults
+        QueryTimeout:      "30s",
+        MaxRowsPerQuery:   10000,
+        RateLimitQPS:      10,
+        MaxRetries:        3,
+        RetryInitialDelay: "1s",
+        RetryMaxDelay:     "30s",
+        
         Metrics: MetricsConfig{
             CurrentQueries:        MetricCategoryConfig{Enabled: true, Interval: "1m"},
             WarehouseLoad:         MetricCategoryConfig{Enabled: true, Interval: "1m"},
@@ -497,5 +574,38 @@ func (cfg *Config) Validate() error {
     if cfg.Warehouse == "" {
         return fmt.Errorf("warehouse is required")
     }
+    
+    // Validate timeout values
+    if cfg.QueryTimeout != "" {
+        if _, err := time.ParseDuration(cfg.QueryTimeout); err != nil {
+            return fmt.Errorf("invalid query_timeout: %w", err)
+        }
+    }
+    
+    if cfg.RetryInitialDelay != "" {
+        if _, err := time.ParseDuration(cfg.RetryInitialDelay); err != nil {
+            return fmt.Errorf("invalid retry_initial_delay: %w", err)
+        }
+    }
+    
+    if cfg.RetryMaxDelay != "" {
+        if _, err := time.ParseDuration(cfg.RetryMaxDelay); err != nil {
+            return fmt.Errorf("invalid retry_max_delay: %w", err)
+        }
+    }
+    
+    // Validate numeric ranges
+    if cfg.MaxRowsPerQuery < 0 {
+        return fmt.Errorf("max_rows_per_query must be positive")
+    }
+    
+    if cfg.RateLimitQPS < 0 {
+        return fmt.Errorf("rate_limit_qps must be positive")
+    }
+    
+    if cfg.MaxRetries < 0 {
+        return fmt.Errorf("max_retries must be non-negative")
+    }
+    
     return nil
 }

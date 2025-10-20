@@ -83,6 +83,9 @@ func (s *snowflakeScraper) buildMetrics(metrics *snowflakeMetrics) pmetric.Metri
     
     scopeMetrics := resourceMetrics.ScopeMetrics().AppendEmpty()
     now := pcommon.NewTimestampFromTime(time.Now())
+
+    // Add self-monitoring metrics FIRST
+    s.addSelfMonitoringMetrics(scopeMetrics, now)
     
     // Standard metrics with per-metric intervals
     if s.config.Metrics.CurrentQueries.Enabled && len(metrics.currentQueries) > 0 {

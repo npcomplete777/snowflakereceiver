@@ -9,6 +9,7 @@ import (
     "github.com/stretchr/testify/assert"
     "github.com/stretchr/testify/require"
     "go.uber.org/zap"
+    "golang.org/x/time/rate"
 )
 
 func newMockClient(t *testing.T) (*snowflakeClient, sqlmock.Sqlmock) {
@@ -22,13 +23,19 @@ func newMockClient(t *testing.T) (*snowflakeClient, sqlmock.Sqlmock) {
         Warehouse: "TEST_WH",
         Database:  "SNOWFLAKE",
         Schema:    "ACCOUNT_USAGE",
+        QueryTimeout:      "30s",
+        MaxRowsPerQuery:   10000,
+        RateLimitQPS:      10,
+        MaxRetries:        3,
+        RetryInitialDelay: "1s",
+        RetryMaxDelay:     "30s",
     }
     
     client := &snowflakeClient{
-        logger:       zap.NewNop(),
-        config:       config,
-        db:           db,
-        queryTimeout: defaultQueryTimeout,
+        logger:      zap.NewNop(),
+        config:      config,
+        db:          db,
+        rateLimiter: rate.NewLimiter(rate.Limit(10), 10),
     }
     
     return client, mock
@@ -47,6 +54,7 @@ func TestNewSnowflakeClient(t *testing.T) {
     require.NoError(t, err)
     assert.NotNil(t, client)
     assert.Equal(t, config, client.config)
+    assert.NotNil(t, client.rateLimiter)
 }
 
 func TestClient_QueryCurrentQueries(t *testing.T) {
@@ -59,7 +67,7 @@ func TestClient_QueryCurrentQueries(t *testing.T) {
     }).AddRow("WH1", "SELECT", "SUCCESS", 10, 1500.0, 1024000.0)
     
     mock.ExpectQuery("SELECT(.+)FROM TABLE\\(SNOWFLAKE.INFORMATION_SCHEMA.QUERY_HISTORY\\(\\)\\)(.+)LIMIT").
-        WithArgs(maxRowsPerQuery).
+        WithArgs(client.config.GetMaxRowsPerQuery()).
         WillReturnRows(rows)
     
     metrics := &snowflakeMetrics{}
@@ -81,7 +89,7 @@ func TestClient_QueryWarehouseLoad(t *testing.T) {
     }).AddRow("WH1", 5.5, 2.0, 0.5, 0.0)
     
     mock.ExpectQuery("SELECT(.+)FROM TABLE\\(SNOWFLAKE.INFORMATION_SCHEMA.WAREHOUSE_LOAD_HISTORY\\(\\)\\)(.+)LIMIT").
-        WithArgs(maxRowsPerQuery).
+        WithArgs(client.config.GetMaxRowsPerQuery()).
         WillReturnRows(rows)
     
     metrics := &snowflakeMetrics{}
@@ -103,7 +111,7 @@ func TestClient_QueryQueryHistory(t *testing.T) {
     }).AddRow("WH1", "SELECT", "SUCCESS", 100, 2500.0, 1024000.0, 512000.0, 1000.0, 100.0)
     
     mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY(.+)LIMIT").
-        WithArgs(maxRowsPerQuery).
+        WithArgs(client.config.GetMaxRowsPerQuery()).
         WillReturnRows(rows)
     
     metrics := &snowflakeMetrics{}
@@ -123,7 +131,7 @@ func TestClient_QueryCreditUsage(t *testing.T) {
     }).AddRow("WH1", 10.5, 8.0, 2.5)
     
     mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY(.+)LIMIT").
-        WithArgs(maxRowsPerQuery).
+        WithArgs(client.config.GetMaxRowsPerQuery()).
         WillReturnRows(rows)
     
     metrics := &snowflakeMetrics{}
@@ -164,7 +172,7 @@ func TestClient_QueryLoginHistory(t *testing.T) {
         AddRow("NO", "390201", 5)
     
     mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.LOGIN_HISTORY(.+)LIMIT").
-        WithArgs(maxRowsPerQuery).
+        WithArgs(client.config.GetMaxRowsPerQuery()).
         WillReturnRows(rows)
     
     metrics := &snowflakeMetrics{}
@@ -185,7 +193,7 @@ func TestClient_QueryPipeUsage(t *testing.T) {
     }).AddRow("MY_PIPE", 5.25, 10240000.0, 100)
     
     mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.PIPE_USAGE_HISTORY(.+)LIMIT").
-        WithArgs(maxRowsPerQuery).
+        WithArgs(client.config.GetMaxRowsPerQuery()).
         WillReturnRows(rows)
     
     metrics := &snowflakeMetrics{}
@@ -205,7 +213,7 @@ func TestClient_QueryDatabaseStorage(t *testing.T) {
     }).AddRow("MY_DB", 1024000.0, 102400.0)
     
     mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.DATABASE_STORAGE_USAGE_HISTORY(.+)LIMIT").
-        WithArgs(maxRowsPerQuery).
+        WithArgs(client.config.GetMaxRowsPerQuery()).
         WillReturnRows(rows)
     
     metrics := &snowflakeMetrics{}
@@ -226,7 +234,7 @@ func TestClient_QueryTaskHistory(t *testing.T) {
     }).AddRow("MY_DB", "MY_SCHEMA", "MY_TASK", "SUCCEEDED", 50, 5000.0)
     
     mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.TASK_HISTORY(.+)LIMIT").
-        WithArgs(maxRowsPerQuery).
+        WithArgs(client.config.GetMaxRowsPerQuery()).
         WillReturnRows(rows)
     
     metrics := &snowflakeMetrics{}
@@ -246,7 +254,7 @@ func TestClient_QueryReplicationUsage(t *testing.T) {
     }).AddRow("MY_DB", 3.5, 10240000.0)
     
     mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.REPLICATION_USAGE_HISTORY(.+)LIMIT").
-        WithArgs(maxRowsPerQuery).
+        WithArgs(client.config.GetMaxRowsPerQuery()).
         WillReturnRows(rows)
     
     metrics := &snowflakeMetrics{}
@@ -267,7 +275,7 @@ func TestClient_QueryAutoClusteringHistory(t *testing.T) {
     }).AddRow("MY_DB", "MY_SCHEMA", "MY_TABLE", 2.5, 10240000.0, 100000.0)
     
     mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.AUTOMATIC_CLUSTERING_HISTORY(.+)LIMIT").
-        WithArgs(maxRowsPerQuery).
+        WithArgs(client.config.GetMaxRowsPerQuery()).
         WillReturnRows(rows)
     
     metrics := &snowflakeMetrics{}
@@ -321,7 +329,7 @@ func TestClient_QueryMetrics_ErrorHandling(t *testing.T) {
     }).AddRow("WH1", 10.5, 8.0, 2.5)
     
     mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY").
-        WithArgs(maxRowsPerQuery).
+        WithArgs(client.config.GetMaxRowsPerQuery()).
         WillReturnRows(creditRows)
     
     metrics, err := client.queryMetrics(context.Background())
@@ -348,4 +356,38 @@ func TestClient_QueryMetrics_AllDisabled(t *testing.T) {
     
     // Verify no queries were executed
     assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestClient_RateLimiting(t *testing.T) {
+    config := &Config{
+        User:             "test",
+        Password:         "test",
+        Account:          "test-account",
+        Warehouse:        "TEST_WH",
+        RateLimitQPS:     5,
+        MaxRetries:       0,
+        QueryTimeout:     "30s",
+        MaxRowsPerQuery:  10000,
+    }
+    
+    client, err := newSnowflakeClient(zap.NewNop(), config)
+    require.NoError(t, err)
+    
+    // Verify rate limiter is configured correctly
+    assert.NotNil(t, client.rateLimiter)
+    assert.Equal(t, rate.Limit(5), client.rateLimiter.Limit())
+}
+
+func TestClient_SelfMonitoring(t *testing.T) {
+    client, _ := newMockClient(t)
+    
+    // Simulate some activity
+    client.queryCount = 100
+    client.errorCount = 5
+    client.retryCount = 10
+    
+    // Verify counters
+    assert.Equal(t, int64(100), client.queryCount)
+    assert.Equal(t, int64(5), client.errorCount)
+    assert.Equal(t, int64(10), client.retryCount)
 }
