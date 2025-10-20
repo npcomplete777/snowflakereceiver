@@ -38,8 +38,23 @@ We match or exceed DataDog and Dynatrace on **all implementable features**:
 ### Prerequisites
 
 - Snowflake account with ACCOUNTADMIN role (or ACCOUNT_USAGE access)
-- OpenTelemetry Collector Builder (ocb) v0.135.0+
 - Go 1.24+
+- OpenTelemetry Collector Builder (ocb) v0.135.0+
+
+**Install OCB:**
+```bash
+# Install OCB
+go install go.opentelemetry.io/collector/cmd/builder@latest
+
+# Verify installation
+ocb version
+```
+
+If `ocb` is not in your PATH after installation, add Go's bin directory:
+```bash
+export PATH=$PATH:$(go env GOPATH)/bin
+# Add to ~/.bashrc or ~/.zshrc to make permanent
+```
 
 ### Build & Run
 ```bash
