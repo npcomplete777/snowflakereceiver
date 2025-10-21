@@ -24,7 +24,7 @@ type Config struct {
     RetryInitialDelay  string `mapstructure:"retry_initial_delay"`  // Default: "1s"
     RetryMaxDelay      string `mapstructure:"retry_max_delay"`      // Default: "30s"
     
-    // ⭐ NEW: Cardinality protection limits
+    // Cardinality protection limits
     MaxUsersCardinality     int `mapstructure:"max_users_cardinality"`     // Default: 500
     MaxSchemasCardinality   int `mapstructure:"max_schemas_cardinality"`   // Default: 200
     MaxDatabasesCardinality int `mapstructure:"max_databases_cardinality"` // Default: 100
@@ -92,7 +92,7 @@ type EventTablesConfig struct {
 type OrganizationConfig struct {
     Enabled           bool                       `mapstructure:"enabled"`
     
-    // ⭐ NEW: Column name configuration for organization tables
+    // Column name configuration for organization tables
     OrganizationNameColumn string `mapstructure:"organization_name_column"` // Default: "ORGANIZATION_NAME"
     AccountNameColumn      string `mapstructure:"account_name_column"`      // Default: "ACCOUNT_NAME"
     
@@ -116,6 +116,41 @@ type OrgCreditUsageColumns struct {
     UsageDate        string `mapstructure:"usage_date"`
 }
 
+func (c OrgCreditUsageColumns) GetOrganizationName() string {
+    if c.OrganizationName != "" {
+        return c.OrganizationName
+    }
+    return "ORGANIZATION_NAME"
+}
+
+func (c OrgCreditUsageColumns) GetAccountName() string {
+    if c.AccountName != "" {
+        return c.AccountName
+    }
+    return "ACCOUNT_NAME"
+}
+
+func (c OrgCreditUsageColumns) GetServiceType() string {
+    if c.ServiceType != "" {
+        return c.ServiceType
+    }
+    return "SERVICE_TYPE"
+}
+
+func (c OrgCreditUsageColumns) GetCreditsUsed() string {
+    if c.CreditsUsed != "" {
+        return c.CreditsUsed
+    }
+    return "CREDITS"
+}
+
+func (c OrgCreditUsageColumns) GetUsageDate() string {
+    if c.UsageDate != "" {
+        return c.UsageDate
+    }
+    return "USAGE_DATE"
+}
+
 func (c *OrgCreditUsageConfig) GetInterval(defaultInterval time.Duration) time.Duration {
     if c.Interval == "" {
         return defaultInterval
@@ -128,8 +163,60 @@ func (c *OrgCreditUsageConfig) GetInterval(defaultInterval time.Duration) time.D
 }
 
 type OrgStorageUsageConfig struct {
-    Enabled  bool   `mapstructure:"enabled"`
-    Interval string `mapstructure:"interval"`
+    Enabled  bool                     `mapstructure:"enabled"`
+    Interval string                   `mapstructure:"interval"`
+    Columns  OrgStorageUsageColumns   `mapstructure:"columns"`
+}
+
+type OrgStorageUsageColumns struct {
+    OrganizationName string `mapstructure:"organization_name"`
+    AccountName      string `mapstructure:"account_name"`
+    StorageBytes     string `mapstructure:"storage_bytes"`
+    StageBytes       string `mapstructure:"stage_bytes"`
+    FailsafeBytes    string `mapstructure:"failsafe_bytes"`
+    UsageDate        string `mapstructure:"usage_date"`
+}
+
+func (c OrgStorageUsageColumns) GetOrganizationName() string {
+    if c.OrganizationName != "" {
+        return c.OrganizationName
+    }
+    return "ORGANIZATION_NAME"
+}
+
+func (c OrgStorageUsageColumns) GetAccountName() string {
+    if c.AccountName != "" {
+        return c.AccountName
+    }
+    return "ACCOUNT_NAME"
+}
+
+func (c OrgStorageUsageColumns) GetStorageBytes() string {
+    if c.StorageBytes != "" {
+        return c.StorageBytes
+    }
+    return "AVERAGE_STORAGE_BYTES"
+}
+
+func (c OrgStorageUsageColumns) GetStageBytes() string {
+    if c.StageBytes != "" {
+        return c.StageBytes
+    }
+    return "AVERAGE_STAGE_BYTES"
+}
+
+func (c OrgStorageUsageColumns) GetFailsafeBytes() string {
+    if c.FailsafeBytes != "" {
+        return c.FailsafeBytes
+    }
+    return "AVERAGE_FAILSAFE_BYTES"
+}
+
+func (c OrgStorageUsageColumns) GetUsageDate() string {
+    if c.UsageDate != "" {
+        return c.UsageDate
+    }
+    return "USAGE_DATE"
 }
 
 func (c *OrgStorageUsageConfig) GetInterval(defaultInterval time.Duration) time.Duration {
@@ -144,8 +231,68 @@ func (c *OrgStorageUsageConfig) GetInterval(defaultInterval time.Duration) time.
 }
 
 type OrgDataTransferConfig struct {
-    Enabled  bool   `mapstructure:"enabled"`
-    Interval string `mapstructure:"interval"`
+    Enabled  bool                     `mapstructure:"enabled"`
+    Interval string                   `mapstructure:"interval"`
+    Columns  OrgDataTransferColumns   `mapstructure:"columns"`
+}
+
+type OrgDataTransferColumns struct {
+    OrganizationName string `mapstructure:"organization_name"`
+    SourceAccountName string `mapstructure:"source_account_name"`
+    TargetAccountName string `mapstructure:"target_account_name"`
+    SourceRegion     string `mapstructure:"source_region"`
+    TargetRegion     string `mapstructure:"target_region"`
+    BytesTransferred string `mapstructure:"bytes_transferred"`
+    TransferDate     string `mapstructure:"transfer_date"`
+}
+
+func (c OrgDataTransferColumns) GetOrganizationName() string {
+    if c.OrganizationName != "" {
+        return c.OrganizationName
+    }
+    return "ORGANIZATION_NAME"
+}
+
+func (c OrgDataTransferColumns) GetSourceAccountName() string {
+    if c.SourceAccountName != "" {
+        return c.SourceAccountName
+    }
+    return "SOURCE_ACCOUNT_NAME"
+}
+
+func (c OrgDataTransferColumns) GetTargetAccountName() string {
+    if c.TargetAccountName != "" {
+        return c.TargetAccountName
+    }
+    return "TARGET_ACCOUNT_NAME"
+}
+
+func (c OrgDataTransferColumns) GetSourceRegion() string {
+    if c.SourceRegion != "" {
+        return c.SourceRegion
+    }
+    return "SOURCE_REGION"
+}
+
+func (c OrgDataTransferColumns) GetTargetRegion() string {
+    if c.TargetRegion != "" {
+        return c.TargetRegion
+    }
+    return "TARGET_REGION"
+}
+
+func (c OrgDataTransferColumns) GetBytesTransferred() string {
+    if c.BytesTransferred != "" {
+        return c.BytesTransferred
+    }
+    return "BYTES_TRANSFERRED"
+}
+
+func (c OrgDataTransferColumns) GetTransferDate() string {
+    if c.TransferDate != "" {
+        return c.TransferDate
+    }
+    return "TRANSFER_DATE"
 }
 
 func (c *OrgDataTransferConfig) GetInterval(defaultInterval time.Duration) time.Duration {
@@ -160,8 +307,52 @@ func (c *OrgDataTransferConfig) GetInterval(defaultInterval time.Duration) time.
 }
 
 type OrgContractUsageConfig struct {
-    Enabled  bool   `mapstructure:"enabled"`
-    Interval string `mapstructure:"interval"`
+    Enabled  bool                      `mapstructure:"enabled"`
+    Interval string                    `mapstructure:"interval"`
+    Columns  OrgContractUsageColumns   `mapstructure:"columns"`
+}
+
+type OrgContractUsageColumns struct {
+    OrganizationName string `mapstructure:"organization_name"`
+    ContractNumber   string `mapstructure:"contract_number"`
+    CreditsUsed      string `mapstructure:"credits_used"`
+    CreditsBilled    string `mapstructure:"credits_billed"`
+    UsageDate        string `mapstructure:"usage_date"`
+}
+
+func (c OrgContractUsageColumns) GetOrganizationName() string {
+    if c.OrganizationName != "" {
+        return c.OrganizationName
+    }
+    return "ORGANIZATION_NAME"
+}
+
+func (c OrgContractUsageColumns) GetContractNumber() string {
+    if c.ContractNumber != "" {
+        return c.ContractNumber
+    }
+    return "CONTRACT_NUMBER"
+}
+
+func (c OrgContractUsageColumns) GetCreditsUsed() string {
+    if c.CreditsUsed != "" {
+        return c.CreditsUsed
+    }
+    return "CREDITS_USED"
+}
+
+func (c OrgContractUsageColumns) GetCreditsBilled() string {
+    if c.CreditsBilled != "" {
+        return c.CreditsBilled
+    }
+    return "CREDITS_BILLED"
+}
+
+func (c OrgContractUsageColumns) GetUsageDate() string {
+    if c.UsageDate != "" {
+        return c.UsageDate
+    }
+    return "USAGE_DATE"
 }
 
 func (c *OrgContractUsageConfig) GetInterval(defaultInterval time.Duration) time.Duration {

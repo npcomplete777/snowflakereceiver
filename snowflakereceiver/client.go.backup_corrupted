@@ -489,11 +489,6 @@ func (c *snowflakeClient) queryMetrics(ctx context.Context) (*snowflakeMetrics, 
                 c.logger.Warn("Failed to query org data transfer", zap.Error(err))
             }
         }
-        if c.config.Organization.OrgContractUsage.Enabled {
-            if err := c.queryOrgContractUsage(ctx, metrics); err != nil {
-                c.logger.Warn("Failed to query org contract usage", zap.Error(err))
-            }
-        }
     }
     
     // Custom queries
@@ -1238,48 +1233,6 @@ func (c *snowflakeClient) queryOrgDataTransfer(ctx context.Context, metrics *sno
 }
 
 // ============================================================================
-
-func (c *snowflakeClient) queryOrgContractUsage(ctx context.Context, metrics *snowflakeMetrics) error {
-    orgNameCol := c.config.Organization.OrganizationNameColumn
-    if orgNameCol == "" {
-        orgNameCol = "ORGANIZATION_NAME"
-    }
-    
-    query := fmt.Sprintf(`
-        SELECT 
-            %s as ORGANIZATION_NAME,
-            CONTRACT_NUMBER,
-            SUM(CREDITS_USED) as TOTAL_CREDITS_USED,
-            SUM(CREDITS_BILLED) as TOTAL_CREDITS_BILLED
-        FROM SNOWFLAKE.ORGANIZATION_USAGE.CONTRACT_ITEMS
-        WHERE USAGE_DATE >= DATEADD(day, -1, CURRENT_DATE())
-        GROUP BY %s, CONTRACT_NUMBER
-        LIMIT ?
-    `, orgNameCol, orgNameCol)
-    
-    rows, err := c.queryWithRetry(ctx, "org_contract_usage", query, c.config.GetMaxRowsPerQuery())
-    if err != nil {
-        return fmt.Errorf("failed to query org contract usage: %w", err)
-    }
-    defer rows.Close()
-    
-    for rows.Next() {
-        var row orgContractUsageRow
-        if err := rows.Scan(
-            &row.organizationName,
-            &row.contractNumber,
-            &row.totalCreditsUsed,
-            &row.totalCreditsBilled,
-        ); err != nil {
-            return fmt.Errorf("failed to scan org contract usage row: %w", err)
-        }
-        
-        metrics.orgContractUsage = append(metrics.orgContractUsage, row)
-    }
-    
-    return rows.Err()
-}
-
 // CUSTOM QUERIES
 // ============================================================================
 

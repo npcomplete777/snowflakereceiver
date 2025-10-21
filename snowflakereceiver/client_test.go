@@ -84,9 +84,9 @@ func TestClient_QueryWarehouseLoad(t *testing.T) {
     defer client.db.Close()
     
     rows := sqlmock.NewRows([]string{
-        "WAREHOUSE_NAME", "AVG_RUNNING", "AVG_QUEUED_LOAD",
+        "WAREHOUSE_NAME", "WAREHOUSE_SIZE", "AVG_RUNNING", "AVG_QUEUED_LOAD",
         "AVG_QUEUED_PROVISIONING", "AVG_BLOCKED",
-    }).AddRow("WH1", 5.5, 2.0, 0.5, 0.0)
+    }).AddRow("WH1", "LARGE", 5.5, 2.0, 0.5, 0.0)
     
     mock.ExpectQuery("SELECT(.+)FROM TABLE\\(SNOWFLAKE.INFORMATION_SCHEMA.WAREHOUSE_LOAD_HISTORY\\(\\)\\)(.+)LIMIT").
         WithArgs(client.config.GetMaxRowsPerQuery()).
@@ -97,6 +97,8 @@ func TestClient_QueryWarehouseLoad(t *testing.T) {
     
     require.NoError(t, err)
     assert.Len(t, metrics.warehouseLoad, 1)
+    assert.Equal(t, "WH1", metrics.warehouseLoad[0].warehouseName.String)
+    assert.Equal(t, "LARGE", metrics.warehouseLoad[0].warehouseSize.String)
     assert.Equal(t, 5.5, metrics.warehouseLoad[0].avgRunning.Float64)
 }
 
@@ -105,17 +107,17 @@ func TestClient_QueryQueryHistory(t *testing.T) {
     defer client.db.Close()
     
     rows := sqlmock.NewRows([]string{
-        "WAREHOUSE_NAME", "QUERY_TYPE", "EXECUTION_STATUS", "QUERY_COUNT",
+        "WAREHOUSE_NAME", "WAREHOUSE_SIZE", "QUERY_TYPE", "EXECUTION_STATUS", "QUERY_COUNT",
         "AVG_EXECUTION_TIME", "AVG_BYTES_SCANNED", "AVG_BYTES_WRITTEN",
         "AVG_ROWS_PRODUCED", "AVG_COMPILATION_TIME",
-    }).AddRow("WH1", "SELECT", "SUCCESS", 100, 2500.0, 1024000.0, 512000.0, 1000.0, 100.0)
+    }).AddRow("WH1", "LARGE", "SELECT", "SUCCESS", 100, 2500.0, 1024000.0, 512000.0, 1000.0, 100.0)
     
     mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY(.+)LIMIT").
         WithArgs(client.config.GetMaxRowsPerQuery()).
         WillReturnRows(rows)
     
     metrics := &snowflakeMetrics{}
-    err := client.queryQueryHistory(context.Background(), metrics)
+    err := client.queryQueryStats(context.Background(), metrics)
     
     require.NoError(t, err)
     assert.Len(t, metrics.queryStats, 1)
@@ -127,8 +129,8 @@ func TestClient_QueryCreditUsage(t *testing.T) {
     defer client.db.Close()
     
     rows := sqlmock.NewRows([]string{
-        "WAREHOUSE_NAME", "TOTAL_CREDITS", "COMPUTE_CREDITS", "CLOUD_SERVICE_CREDITS",
-    }).AddRow("WH1", 10.5, 8.0, 2.5)
+        "WAREHOUSE_NAME", "WAREHOUSE_SIZE", "TOTAL_CREDITS", "COMPUTE_CREDITS", "CLOUD_SERVICE_CREDITS",
+    }).AddRow("WH1", "LARGE", 10.5, 8.0, 2.5)
     
     mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY(.+)LIMIT").
         WithArgs(client.config.GetMaxRowsPerQuery()).
@@ -325,8 +327,8 @@ func TestClient_QueryMetrics_ErrorHandling(t *testing.T) {
     
     // Credit usage will succeed
     creditRows := sqlmock.NewRows([]string{
-        "WAREHOUSE_NAME", "TOTAL_CREDITS", "COMPUTE_CREDITS", "CLOUD_SERVICE_CREDITS",
-    }).AddRow("WH1", 10.5, 8.0, 2.5)
+        "WAREHOUSE_NAME", "WAREHOUSE_SIZE", "TOTAL_CREDITS", "COMPUTE_CREDITS", "CLOUD_SERVICE_CREDITS",
+    }).AddRow("WH1", "LARGE", 10.5, 8.0, 2.5)
     
     mock.ExpectQuery("SELECT(.+)FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY").
         WithArgs(client.config.GetMaxRowsPerQuery()).

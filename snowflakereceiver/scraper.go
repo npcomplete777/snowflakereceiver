@@ -1166,6 +1166,49 @@ func (s *snowflakeScraper) addOrgDataTransferMetrics(scopeMetrics pmetric.ScopeM
     }
 }
 
+
+
+func (s *snowflakeScraper) addOrgContractMetrics(scopeMetrics pmetric.ScopeMetrics, contracts []orgContractUsageRow, now pcommon.Timestamp) {
+    for _, contract := range contracts {
+        // Credits used metric (plain float64)
+        metric := scopeMetrics.Metrics().AppendEmpty()
+        metric.SetName("snowflake.organization.contract.credits.used")
+        metric.SetDescription("Organization contract credits used")
+        metric.SetUnit("{credits}")
+        gauge := metric.SetEmptyGauge()
+        dp := gauge.DataPoints().AppendEmpty()
+        dp.SetTimestamp(now)
+        dp.SetDoubleValue(contract.totalCreditsUsed)
+        
+        if contract.organizationName.Valid {
+            dp.Attributes().PutStr("organization.name", contract.organizationName.String)
+        }
+        if contract.contractNumber.Valid {
+            dp.Attributes().PutInt("contract.number", contract.contractNumber.Int64)
+        }
+        dp.Attributes().PutStr("data.source", "organization_usage")
+        
+        // Credits billed metric (sql.NullFloat64)
+        if contract.totalCreditsBilled.Valid {
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.organization.contract.credits.billed")
+            metric.SetDescription("Organization contract credits billed")
+            metric.SetUnit("{credits}")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetDoubleValue(contract.totalCreditsBilled.Float64)
+            
+            if contract.organizationName.Valid {
+                dp.Attributes().PutStr("organization.name", contract.organizationName.String)
+            }
+            if contract.contractNumber.Valid {
+                dp.Attributes().PutInt("contract.number", contract.contractNumber.Int64)
+            }
+            dp.Attributes().PutStr("data.source", "organization_usage")
+        }
+    }
+}
 func (s *snowflakeScraper) addCustomQueryMetrics(scopeMetrics pmetric.ScopeMetrics, result customQueryResult, now pcommon.Timestamp) {
     for _, row := range result.rows {
         metric := scopeMetrics.Metrics().AppendEmpty()
