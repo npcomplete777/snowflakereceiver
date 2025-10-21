@@ -1,11 +1,11 @@
+
 package snowflakereceiver
 
 import (
-    "context"
     "fmt"
-    "strconv"
+    "context"
     "time"
-    
+
     "go.opentelemetry.io/collector/pdata/pcommon"
     "go.opentelemetry.io/collector/pdata/pmetric"
     "go.opentelemetry.io/collector/receiver"
@@ -33,14 +33,9 @@ func newSnowflakeScraper(settings receiver.Settings, config *Config) (*snowflake
     }, nil
 }
 
-// Shutdown closes the database connection
 func (s *snowflakeScraper) Shutdown(ctx context.Context) error {
-    s.logger.Info("Shutting down Snowflake scraper")
     if s.client != nil {
-        if err := s.client.Close(); err != nil {
-            s.logger.Error("Failed to close Snowflake connection", zap.Error(err))
-            return err
-        }
+        return s.client.close()
     }
     return nil
 }
@@ -76,6 +71,7 @@ func (s *snowflakeScraper) buildMetrics(metrics *snowflakeMetrics) pmetric.Metri
     md := pmetric.NewMetrics()
     resourceMetrics := md.ResourceMetrics().AppendEmpty()
     
+    // Add resource attributes
     resourceAttrs := resourceMetrics.Resource().Attributes()
     resourceAttrs.PutStr("snowflake.account.name", s.config.Account)
     resourceAttrs.PutStr("snowflake.warehouse.name", s.config.Warehouse)
@@ -84,10 +80,10 @@ func (s *snowflakeScraper) buildMetrics(metrics *snowflakeMetrics) pmetric.Metri
     scopeMetrics := resourceMetrics.ScopeMetrics().AppendEmpty()
     now := pcommon.NewTimestampFromTime(time.Now())
 
-    // Add self-monitoring metrics FIRST
+    // ALWAYS add self-monitoring first
     s.addSelfMonitoringMetrics(scopeMetrics, now)
     
-    // Standard metrics with per-metric intervals
+    // Add metrics based on configuration and interval scheduling
     if s.config.Metrics.CurrentQueries.Enabled && len(metrics.currentQueries) > 0 {
         interval := s.config.Metrics.CurrentQueries.GetInterval(1 * time.Minute)
         if s.shouldScrape("current_queries", interval) {
@@ -170,13 +166,13 @@ func (s *snowflakeScraper) buildMetrics(metrics *snowflakeMetrics) pmetric.Metri
     
     if s.config.Metrics.AutoClusteringHistory.Enabled && len(metrics.autoClusteringHistory) > 0 {
         interval := s.config.Metrics.AutoClusteringHistory.GetInterval(15 * time.Minute)
-        if s.shouldScrape("auto_clustering_history", interval) {
+        if s.shouldScrape("auto_clustering", interval) {
             s.addAutoClusteringMetrics(scopeMetrics, metrics.autoClusteringHistory, now)
-            s.markScraped("auto_clustering_history")
+            s.markScraped("auto_clustering")
         }
     }
     
-    // EVENT TABLES - REAL-TIME (seconds latency!)
+    // Event tables
     if s.config.EventTables.Enabled {
         if s.config.EventTables.QueryLogs.Enabled && len(metrics.eventQueryLogs) > 0 {
             interval := s.config.EventTables.QueryLogs.GetInterval(30 * time.Second)
@@ -185,7 +181,6 @@ func (s *snowflakeScraper) buildMetrics(metrics *snowflakeMetrics) pmetric.Metri
                 s.markScraped("event_query_logs")
             }
         }
-        
         if s.config.EventTables.TaskLogs.Enabled && len(metrics.eventTaskLogs) > 0 {
             interval := s.config.EventTables.TaskLogs.GetInterval(30 * time.Second)
             if s.shouldScrape("event_task_logs", interval) {
@@ -193,25 +188,9 @@ func (s *snowflakeScraper) buildMetrics(metrics *snowflakeMetrics) pmetric.Metri
                 s.markScraped("event_task_logs")
             }
         }
-        
-        if s.config.EventTables.FunctionLogs.Enabled && len(metrics.eventFunctionLogs) > 0 {
-            interval := s.config.EventTables.FunctionLogs.GetInterval(30 * time.Second)
-            if s.shouldScrape("event_function_logs", interval) {
-                s.addEventTableMetrics(scopeMetrics, metrics.eventFunctionLogs, now)
-                s.markScraped("event_function_logs")
-            }
-        }
-        
-        if s.config.EventTables.ProcedureLogs.Enabled && len(metrics.eventProcedureLogs) > 0 {
-            interval := s.config.EventTables.ProcedureLogs.GetInterval(30 * time.Second)
-            if s.shouldScrape("event_procedure_logs", interval) {
-                s.addEventTableMetrics(scopeMetrics, metrics.eventProcedureLogs, now)
-                s.markScraped("event_procedure_logs")
-            }
-        }
     }
     
-    // ORGANIZATION METRICS
+    // Organization metrics
     if s.config.Organization.Enabled {
         if s.config.Organization.OrgCreditUsage.Enabled && len(metrics.orgCreditUsage) > 0 {
             interval := s.config.Organization.OrgCreditUsage.GetInterval(1 * time.Hour)
@@ -220,7 +199,6 @@ func (s *snowflakeScraper) buildMetrics(metrics *snowflakeMetrics) pmetric.Metri
                 s.markScraped("org_credit_usage")
             }
         }
-        
         if s.config.Organization.OrgStorageUsage.Enabled && len(metrics.orgStorageUsage) > 0 {
             interval := s.config.Organization.OrgStorageUsage.GetInterval(1 * time.Hour)
             if s.shouldScrape("org_storage_usage", interval) {
@@ -228,7 +206,6 @@ func (s *snowflakeScraper) buildMetrics(metrics *snowflakeMetrics) pmetric.Metri
                 s.markScraped("org_storage_usage")
             }
         }
-        
         if s.config.Organization.OrgDataTransfer.Enabled && len(metrics.orgDataTransfer) > 0 {
             interval := s.config.Organization.OrgDataTransfer.GetInterval(1 * time.Hour)
             if s.shouldScrape("org_data_transfer", interval) {
@@ -236,18 +213,10 @@ func (s *snowflakeScraper) buildMetrics(metrics *snowflakeMetrics) pmetric.Metri
                 s.markScraped("org_data_transfer")
             }
         }
-        
-        if s.config.Organization.OrgContractUsage.Enabled && len(metrics.orgContractUsage) > 0 {
-            interval := s.config.Organization.OrgContractUsage.GetInterval(12 * time.Hour)
-            if s.shouldScrape("org_contract_usage", interval) {
-                s.addOrgContractMetrics(scopeMetrics, metrics.orgContractUsage, now)
-                s.markScraped("org_contract_usage")
-            }
-        }
     }
     
-    // CUSTOM QUERIES
-    if s.config.CustomQueries.Enabled && len(metrics.customQueryResults) > 0 {
+    // Custom queries
+    if s.config.CustomQueries.Enabled {
         for _, result := range metrics.customQueryResults {
             s.addCustomQueryMetrics(scopeMetrics, result, now)
         }
@@ -256,10 +225,18 @@ func (s *snowflakeScraper) buildMetrics(metrics *snowflakeMetrics) pmetric.Metri
     return md
 }
 
-// ========== INFORMATION_SCHEMA Metrics (REAL-TIME) ==========
+// ============================================================================
+// METRIC CREATION FUNCTIONS WITH ALL DIMENSIONS
+// ============================================================================
 
 func (s *snowflakeScraper) addCurrentQueryMetrics(scopeMetrics pmetric.ScopeMetrics, queries []currentQueryRow, now pcommon.Timestamp) {
     for _, query := range queries {
+        // ⭐ Use circuit breaker for high-cardinality dimensions
+        userName := s.client.cardTracker.trackUser(query.userName.String)
+        schemaName := s.client.cardTracker.trackSchema(query.schemaName.String)
+        databaseName := s.client.cardTracker.trackDatabase(query.databaseName.String)
+        roleName := s.client.cardTracker.trackRole(query.roleName.String)
+        
         // Query count metric
         metric := scopeMetrics.Metrics().AppendEmpty()
         metric.SetName("snowflake.queries.current.count")
@@ -269,8 +246,13 @@ func (s *snowflakeScraper) addCurrentQueryMetrics(scopeMetrics pmetric.ScopeMetr
         dp := gauge.DataPoints().AppendEmpty()
         dp.SetTimestamp(now)
         dp.SetIntValue(query.queryCount)
+        
+        // Add ALL dimensions
         if query.warehouseName.Valid {
             dp.Attributes().PutStr("warehouse.name", query.warehouseName.String)
+        }
+        if query.warehouseSize.Valid {
+            dp.Attributes().PutStr("warehouse.size", query.warehouseSize.String)
         }
         if query.queryType.Valid {
             dp.Attributes().PutStr("query.type", query.queryType.String)
@@ -278,131 +260,185 @@ func (s *snowflakeScraper) addCurrentQueryMetrics(scopeMetrics pmetric.ScopeMetr
         if query.executionStatus.Valid {
             dp.Attributes().PutStr("execution.status", query.executionStatus.String)
         }
+        dp.Attributes().PutStr("database.name", databaseName)
+        dp.Attributes().PutStr("schema.name", schemaName)
+        dp.Attributes().PutStr("user.name", userName)
+        dp.Attributes().PutStr("role.name", roleName)
+        if query.executionStatus.String == "FAILED" && query.errorCode.Valid {
+            dp.Attributes().PutStr("error.code", query.errorCode.String)
+        }
         dp.Attributes().PutStr("data.source", "information_schema")
         
         // Execution time metric
         if query.avgExecutionTime.Valid {
-            execMetric := scopeMetrics.Metrics().AppendEmpty()
-            execMetric.SetName("snowflake.queries.current.execution.time")
-            execMetric.SetDescription("Current query execution time (REAL-TIME)")
-            execMetric.SetUnit("ms")
-            execGauge := execMetric.SetEmptyGauge()
-            execDp := execGauge.DataPoints().AppendEmpty()
-            execDp.SetTimestamp(now)
-            execDp.SetIntValue(int64(query.avgExecutionTime.Float64))
-            if query.warehouseName.Valid {
-                execDp.Attributes().PutStr("warehouse.name", query.warehouseName.String)
-            }
-            if query.queryType.Valid {
-                execDp.Attributes().PutStr("query.type", query.queryType.String)
-            }
-            execDp.Attributes().PutStr("data.source", "information_schema")
-        }
-        
-        // Bytes scanned metric
-        if query.avgBytesScanned.Valid {
-            bytesMetric := scopeMetrics.Metrics().AppendEmpty()
-            bytesMetric.SetName("snowflake.queries.current.bytes.scanned")
-            bytesMetric.SetDescription("Current query bytes scanned (REAL-TIME)")
-            bytesMetric.SetUnit("By")
-            bytesGauge := bytesMetric.SetEmptyGauge()
-            bytesDp := bytesGauge.DataPoints().AppendEmpty()
-            bytesDp.SetTimestamp(now)
-            bytesDp.SetIntValue(int64(query.avgBytesScanned.Float64))
-            if query.warehouseName.Valid {
-                bytesDp.Attributes().PutStr("warehouse.name", query.warehouseName.String)
-            }
-            if query.queryType.Valid {
-                bytesDp.Attributes().PutStr("query.type", query.queryType.String)
-            }
-            bytesDp.Attributes().PutStr("data.source", "information_schema")
-        }
-    }
-}
-
-func (s *snowflakeScraper) addWarehouseLoadMetrics(scopeMetrics pmetric.ScopeMetrics, loads []warehouseLoadRow, now pcommon.Timestamp) {
-    for _, load := range loads {
-        // Running queries
-        if load.avgRunning.Valid {
             metric := scopeMetrics.Metrics().AppendEmpty()
-            metric.SetName("snowflake.warehouse.queries.running")
-            metric.SetDescription("Average queries running (REAL-TIME)")
-            metric.SetUnit("{queries}")
+            metric.SetName("snowflake.queries.current.execution.time")
+            metric.SetDescription("Average execution time for current queries")
+            metric.SetUnit("ms")
             gauge := metric.SetEmptyGauge()
             dp := gauge.DataPoints().AppendEmpty()
             dp.SetTimestamp(now)
-            dp.SetDoubleValue(load.avgRunning.Float64)
-            if load.warehouseName.Valid {
-                dp.Attributes().PutStr("warehouse.name", load.warehouseName.String)
+            dp.SetDoubleValue(query.avgExecutionTime.Float64)
+            
+            // Same dimensions
+            if query.warehouseName.Valid {
+                dp.Attributes().PutStr("warehouse.name", query.warehouseName.String)
+            }
+            if query.warehouseSize.Valid {
+                dp.Attributes().PutStr("warehouse.size", query.warehouseSize.String)
+            }
+            if query.queryType.Valid {
+                dp.Attributes().PutStr("query.type", query.queryType.String)
+            }
+            if query.executionStatus.Valid {
+                dp.Attributes().PutStr("execution.status", query.executionStatus.String)
+            }
+            dp.Attributes().PutStr("database.name", databaseName)
+            dp.Attributes().PutStr("schema.name", schemaName)
+            dp.Attributes().PutStr("user.name", userName)
+            dp.Attributes().PutStr("role.name", roleName)
+            if query.executionStatus.String == "FAILED" && query.errorCode.Valid {
+                dp.Attributes().PutStr("error.code", query.errorCode.String)
             }
             dp.Attributes().PutStr("data.source", "information_schema")
         }
         
-        // Queued due to overload
-        if load.avgQueuedLoad.Valid {
-            queuedMetric := scopeMetrics.Metrics().AppendEmpty()
-            queuedMetric.SetName("snowflake.warehouse.queries.queued.overload")
-            queuedMetric.SetDescription("Average queries queued due to overload (REAL-TIME)")
-            queuedMetric.SetUnit("{queries}")
-            queuedGauge := queuedMetric.SetEmptyGauge()
-            queuedDp := queuedGauge.DataPoints().AppendEmpty()
-            queuedDp.SetTimestamp(now)
-            queuedDp.SetDoubleValue(load.avgQueuedLoad.Float64)
-            if load.warehouseName.Valid {
-                queuedDp.Attributes().PutStr("warehouse.name", load.warehouseName.String)
+        // Bytes scanned metric
+        if query.avgBytesScanned.Valid {
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.queries.current.bytes.scanned")
+            metric.SetDescription("Average bytes scanned for current queries")
+            metric.SetUnit("By")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetDoubleValue(query.avgBytesScanned.Float64)
+            
+            // Same dimensions
+            if query.warehouseName.Valid {
+                dp.Attributes().PutStr("warehouse.name", query.warehouseName.String)
             }
-            queuedDp.Attributes().PutStr("data.source", "information_schema")
-        }
-        
-        // Queued for provisioning
-        if load.avgQueuedProvisioning.Valid {
-            provMetric := scopeMetrics.Metrics().AppendEmpty()
-            provMetric.SetName("snowflake.warehouse.queries.queued.provisioning")
-            provMetric.SetDescription("Average queries queued for provisioning (REAL-TIME)")
-            provMetric.SetUnit("{queries}")
-            provGauge := provMetric.SetEmptyGauge()
-            provDp := provGauge.DataPoints().AppendEmpty()
-            provDp.SetTimestamp(now)
-            provDp.SetDoubleValue(load.avgQueuedProvisioning.Float64)
-            if load.warehouseName.Valid {
-                provDp.Attributes().PutStr("warehouse.name", load.warehouseName.String)
+            if query.warehouseSize.Valid {
+                dp.Attributes().PutStr("warehouse.size", query.warehouseSize.String)
             }
-            provDp.Attributes().PutStr("data.source", "information_schema")
-        }
-        
-        // Blocked queries
-        if load.avgBlocked.Valid {
-            blockedMetric := scopeMetrics.Metrics().AppendEmpty()
-            blockedMetric.SetName("snowflake.warehouse.queries.blocked")
-            blockedMetric.SetDescription("Average queries blocked (REAL-TIME)")
-            blockedMetric.SetUnit("{queries}")
-            blockedGauge := blockedMetric.SetEmptyGauge()
-            blockedDp := blockedGauge.DataPoints().AppendEmpty()
-            blockedDp.SetTimestamp(now)
-            blockedDp.SetDoubleValue(load.avgBlocked.Float64)
-            if load.warehouseName.Valid {
-                blockedDp.Attributes().PutStr("warehouse.name", load.warehouseName.String)
+            if query.queryType.Valid {
+                dp.Attributes().PutStr("query.type", query.queryType.String)
             }
-            blockedDp.Attributes().PutStr("data.source", "information_schema")
+            if query.executionStatus.Valid {
+                dp.Attributes().PutStr("execution.status", query.executionStatus.String)
+            }
+            dp.Attributes().PutStr("database.name", databaseName)
+            dp.Attributes().PutStr("schema.name", schemaName)
+            dp.Attributes().PutStr("user.name", userName)
+            dp.Attributes().PutStr("role.name", roleName)
+            if query.executionStatus.String == "FAILED" && query.errorCode.Valid {
+                dp.Attributes().PutStr("error.code", query.errorCode.String)
+            }
+            dp.Attributes().PutStr("data.source", "information_schema")
         }
     }
 }
 
-// ========== ACCOUNT_USAGE Metrics (Historical) ==========
+
+func (s *snowflakeScraper) addWarehouseLoadMetrics(scopeMetrics pmetric.ScopeMetrics, loads []warehouseLoadRow, now pcommon.Timestamp) {
+    for _, load := range loads {
+        // Running queries
+        metric := scopeMetrics.Metrics().AppendEmpty()
+        metric.SetName("snowflake.warehouse.queries.running")
+        metric.SetDescription("Average running queries in warehouse")
+        metric.SetUnit("{queries}")
+        gauge := metric.SetEmptyGauge()
+        dp := gauge.DataPoints().AppendEmpty()
+        dp.SetTimestamp(now)
+        dp.SetDoubleValue(load.avgRunning.Float64)
+        
+        if load.warehouseName.Valid {
+            dp.Attributes().PutStr("warehouse.name", load.warehouseName.String)
+        }
+        if load.warehouseSize.Valid {
+            dp.Attributes().PutStr("warehouse.size", load.warehouseSize.String)
+        }
+        dp.Attributes().PutStr("data.source", "information_schema")
+        
+        // Queued overload
+        metric = scopeMetrics.Metrics().AppendEmpty()
+        metric.SetName("snowflake.warehouse.queries.queued.overload")
+        metric.SetDescription("Average queries queued due to overload")
+        metric.SetUnit("{queries}")
+        gauge = metric.SetEmptyGauge()
+        dp = gauge.DataPoints().AppendEmpty()
+        dp.SetTimestamp(now)
+        dp.SetDoubleValue(load.avgQueuedLoad.Float64)
+        
+        if load.warehouseName.Valid {
+            dp.Attributes().PutStr("warehouse.name", load.warehouseName.String)
+        }
+        if load.warehouseSize.Valid {
+            dp.Attributes().PutStr("warehouse.size", load.warehouseSize.String)
+        }
+        dp.Attributes().PutStr("data.source", "information_schema")
+        
+        // Queued provisioning
+        metric = scopeMetrics.Metrics().AppendEmpty()
+        metric.SetName("snowflake.warehouse.queries.queued.provisioning")
+        metric.SetDescription("Average queries queued for provisioning")
+        metric.SetUnit("{queries}")
+        gauge = metric.SetEmptyGauge()
+        dp = gauge.DataPoints().AppendEmpty()
+        dp.SetTimestamp(now)
+        dp.SetDoubleValue(load.avgQueuedProvisioning.Float64)
+        
+        if load.warehouseName.Valid {
+            dp.Attributes().PutStr("warehouse.name", load.warehouseName.String)
+        }
+        if load.warehouseSize.Valid {
+            dp.Attributes().PutStr("warehouse.size", load.warehouseSize.String)
+        }
+        dp.Attributes().PutStr("data.source", "information_schema")
+        
+        // Blocked queries
+        metric = scopeMetrics.Metrics().AppendEmpty()
+        metric.SetName("snowflake.warehouse.queries.blocked")
+        metric.SetDescription("Average blocked queries")
+        metric.SetUnit("{queries}")
+        gauge = metric.SetEmptyGauge()
+        dp = gauge.DataPoints().AppendEmpty()
+        dp.SetTimestamp(now)
+        dp.SetDoubleValue(load.avgBlocked.Float64)
+        
+        if load.warehouseName.Valid {
+            dp.Attributes().PutStr("warehouse.name", load.warehouseName.String)
+        }
+        if load.warehouseSize.Valid {
+            dp.Attributes().PutStr("warehouse.size", load.warehouseSize.String)
+        }
+        dp.Attributes().PutStr("data.source", "information_schema")
+    }
+}
 
 func (s *snowflakeScraper) addQueryMetrics(scopeMetrics pmetric.ScopeMetrics, stats []queryStatRow, now pcommon.Timestamp) {
     for _, stat := range stats {
+        // Use circuit breaker for high-cardinality dimensions
+        userName := s.client.cardTracker.trackUser(stat.userName.String)
+        schemaName := s.client.cardTracker.trackSchema(stat.schemaName.String)
+        databaseName := s.client.cardTracker.trackDatabase(stat.databaseName.String)
+        roleName := s.client.cardTracker.trackRole(stat.roleName.String)
+        
         // Query count
         metric := scopeMetrics.Metrics().AppendEmpty()
         metric.SetName("snowflake.queries.count")
-        metric.SetDescription("Number of queries executed (Historical)")
+        metric.SetDescription("Total query count (ACCOUNT_USAGE)")
         metric.SetUnit("{queries}")
         gauge := metric.SetEmptyGauge()
         dp := gauge.DataPoints().AppendEmpty()
         dp.SetTimestamp(now)
         dp.SetIntValue(stat.queryCount)
+        
         if stat.warehouseName.Valid {
             dp.Attributes().PutStr("warehouse.name", stat.warehouseName.String)
+        }
+        if stat.warehouseSize.Valid {
+            dp.Attributes().PutStr("warehouse.size", stat.warehouseSize.String)
         }
         if stat.queryType.Valid {
             dp.Attributes().PutStr("query.type", stat.queryType.String)
@@ -410,101 +446,163 @@ func (s *snowflakeScraper) addQueryMetrics(scopeMetrics pmetric.ScopeMetrics, st
         if stat.executionStatus.Valid {
             dp.Attributes().PutStr("execution.status", stat.executionStatus.String)
         }
+        dp.Attributes().PutStr("database.name", databaseName)
+        dp.Attributes().PutStr("schema.name", schemaName)
+        dp.Attributes().PutStr("user.name", userName)
+        dp.Attributes().PutStr("role.name", roleName)
+        if stat.executionStatus.String == "FAILED" && stat.errorCode.Valid {
+            dp.Attributes().PutStr("error.code", stat.errorCode.String)
+        }
         dp.Attributes().PutStr("data.source", "account_usage")
         
         // Execution time
         if stat.avgExecutionTime.Valid {
-            execMetric := scopeMetrics.Metrics().AppendEmpty()
-            execMetric.SetName("snowflake.queries.execution.time")
-            execMetric.SetDescription("Average query execution time (Historical)")
-            execMetric.SetUnit("ms")
-            execGauge := execMetric.SetEmptyGauge()
-            execDp := execGauge.DataPoints().AppendEmpty()
-            execDp.SetTimestamp(now)
-            execDp.SetIntValue(int64(stat.avgExecutionTime.Float64))
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.queries.execution.time")
+            metric.SetDescription("Average query execution time")
+            metric.SetUnit("ms")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetDoubleValue(stat.avgExecutionTime.Float64)
+            
             if stat.warehouseName.Valid {
-                execDp.Attributes().PutStr("warehouse.name", stat.warehouseName.String)
+                dp.Attributes().PutStr("warehouse.name", stat.warehouseName.String)
+            }
+            if stat.warehouseSize.Valid {
+                dp.Attributes().PutStr("warehouse.size", stat.warehouseSize.String)
             }
             if stat.queryType.Valid {
-                execDp.Attributes().PutStr("query.type", stat.queryType.String)
+                dp.Attributes().PutStr("query.type", stat.queryType.String)
             }
-            execDp.Attributes().PutStr("data.source", "account_usage")
+            if stat.executionStatus.Valid {
+                dp.Attributes().PutStr("execution.status", stat.executionStatus.String)
+            }
+            dp.Attributes().PutStr("database.name", databaseName)
+            dp.Attributes().PutStr("schema.name", schemaName)
+            dp.Attributes().PutStr("user.name", userName)
+            dp.Attributes().PutStr("role.name", roleName)
+            dp.Attributes().PutStr("data.source", "account_usage")
         }
         
         // Bytes scanned
         if stat.avgBytesScanned.Valid {
-            bytesMetric := scopeMetrics.Metrics().AppendEmpty()
-            bytesMetric.SetName("snowflake.queries.bytes.scanned")
-            bytesMetric.SetDescription("Average bytes scanned per query (Historical)")
-            bytesMetric.SetUnit("By")
-            bytesGauge := bytesMetric.SetEmptyGauge()
-            bytesDp := bytesGauge.DataPoints().AppendEmpty()
-            bytesDp.SetTimestamp(now)
-            bytesDp.SetIntValue(int64(stat.avgBytesScanned.Float64))
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.queries.bytes.scanned")
+            metric.SetDescription("Average bytes scanned")
+            metric.SetUnit("By")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetDoubleValue(stat.avgBytesScanned.Float64)
+            
             if stat.warehouseName.Valid {
-                bytesDp.Attributes().PutStr("warehouse.name", stat.warehouseName.String)
+                dp.Attributes().PutStr("warehouse.name", stat.warehouseName.String)
+            }
+            if stat.warehouseSize.Valid {
+                dp.Attributes().PutStr("warehouse.size", stat.warehouseSize.String)
             }
             if stat.queryType.Valid {
-                bytesDp.Attributes().PutStr("query.type", stat.queryType.String)
+                dp.Attributes().PutStr("query.type", stat.queryType.String)
             }
-            bytesDp.Attributes().PutStr("data.source", "account_usage")
+            if stat.executionStatus.Valid {
+                dp.Attributes().PutStr("execution.status", stat.executionStatus.String)
+            }
+            dp.Attributes().PutStr("database.name", databaseName)
+            dp.Attributes().PutStr("schema.name", schemaName)
+            dp.Attributes().PutStr("user.name", userName)
+            dp.Attributes().PutStr("role.name", roleName)
+            dp.Attributes().PutStr("data.source", "account_usage")
         }
         
         // Bytes written
         if stat.avgBytesWritten.Valid {
-            writtenMetric := scopeMetrics.Metrics().AppendEmpty()
-            writtenMetric.SetName("snowflake.queries.bytes.written")
-            writtenMetric.SetDescription("Average bytes written per query (Historical)")
-            writtenMetric.SetUnit("By")
-            writtenGauge := writtenMetric.SetEmptyGauge()
-            writtenDp := writtenGauge.DataPoints().AppendEmpty()
-            writtenDp.SetTimestamp(now)
-            writtenDp.SetIntValue(int64(stat.avgBytesWritten.Float64))
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.queries.bytes.written")
+            metric.SetDescription("Average bytes written")
+            metric.SetUnit("By")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetDoubleValue(stat.avgBytesWritten.Float64)
+            
             if stat.warehouseName.Valid {
-                writtenDp.Attributes().PutStr("warehouse.name", stat.warehouseName.String)
+                dp.Attributes().PutStr("warehouse.name", stat.warehouseName.String)
+            }
+            if stat.warehouseSize.Valid {
+                dp.Attributes().PutStr("warehouse.size", stat.warehouseSize.String)
             }
             if stat.queryType.Valid {
-                writtenDp.Attributes().PutStr("query.type", stat.queryType.String)
+                dp.Attributes().PutStr("query.type", stat.queryType.String)
             }
-            writtenDp.Attributes().PutStr("data.source", "account_usage")
+            if stat.executionStatus.Valid {
+                dp.Attributes().PutStr("execution.status", stat.executionStatus.String)
+            }
+            dp.Attributes().PutStr("database.name", databaseName)
+            dp.Attributes().PutStr("schema.name", schemaName)
+            dp.Attributes().PutStr("user.name", userName)
+            dp.Attributes().PutStr("role.name", roleName)
+            dp.Attributes().PutStr("data.source", "account_usage")
         }
         
         // Rows produced
         if stat.avgRowsProduced.Valid {
-            rowsMetric := scopeMetrics.Metrics().AppendEmpty()
-            rowsMetric.SetName("snowflake.queries.rows.produced")
-            rowsMetric.SetDescription("Average rows produced per query (Historical)")
-            rowsMetric.SetUnit("{rows}")
-            rowsGauge := rowsMetric.SetEmptyGauge()
-            rowsDp := rowsGauge.DataPoints().AppendEmpty()
-            rowsDp.SetTimestamp(now)
-            rowsDp.SetIntValue(int64(stat.avgRowsProduced.Float64))
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.queries.rows.produced")
+            metric.SetDescription("Average rows produced")
+            metric.SetUnit("{rows}")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetDoubleValue(stat.avgRowsProduced.Float64)
+            
             if stat.warehouseName.Valid {
-                rowsDp.Attributes().PutStr("warehouse.name", stat.warehouseName.String)
+                dp.Attributes().PutStr("warehouse.name", stat.warehouseName.String)
+            }
+            if stat.warehouseSize.Valid {
+                dp.Attributes().PutStr("warehouse.size", stat.warehouseSize.String)
             }
             if stat.queryType.Valid {
-                rowsDp.Attributes().PutStr("query.type", stat.queryType.String)
+                dp.Attributes().PutStr("query.type", stat.queryType.String)
             }
-            rowsDp.Attributes().PutStr("data.source", "account_usage")
+            if stat.executionStatus.Valid {
+                dp.Attributes().PutStr("execution.status", stat.executionStatus.String)
+            }
+            dp.Attributes().PutStr("database.name", databaseName)
+            dp.Attributes().PutStr("schema.name", schemaName)
+            dp.Attributes().PutStr("user.name", userName)
+            dp.Attributes().PutStr("role.name", roleName)
+            dp.Attributes().PutStr("data.source", "account_usage")
         }
         
         // Compilation time
         if stat.avgCompilationTime.Valid {
-            compMetric := scopeMetrics.Metrics().AppendEmpty()
-            compMetric.SetName("snowflake.queries.compilation.time")
-            compMetric.SetDescription("Average query compilation time (Historical)")
-            compMetric.SetUnit("ms")
-            compGauge := compMetric.SetEmptyGauge()
-            compDp := compGauge.DataPoints().AppendEmpty()
-            compDp.SetTimestamp(now)
-            compDp.SetIntValue(int64(stat.avgCompilationTime.Float64))
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.queries.compilation.time")
+            metric.SetDescription("Average compilation time")
+            metric.SetUnit("ms")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetDoubleValue(stat.avgCompilationTime.Float64)
+            
             if stat.warehouseName.Valid {
-                compDp.Attributes().PutStr("warehouse.name", stat.warehouseName.String)
+                dp.Attributes().PutStr("warehouse.name", stat.warehouseName.String)
+            }
+            if stat.warehouseSize.Valid {
+                dp.Attributes().PutStr("warehouse.size", stat.warehouseSize.String)
             }
             if stat.queryType.Valid {
-                compDp.Attributes().PutStr("query.type", stat.queryType.String)
+                dp.Attributes().PutStr("query.type", stat.queryType.String)
             }
-            compDp.Attributes().PutStr("data.source", "account_usage")
+            if stat.executionStatus.Valid {
+                dp.Attributes().PutStr("execution.status", stat.executionStatus.String)
+            }
+            dp.Attributes().PutStr("database.name", databaseName)
+            dp.Attributes().PutStr("schema.name", schemaName)
+            dp.Attributes().PutStr("user.name", userName)
+            dp.Attributes().PutStr("role.name", roleName)
+            dp.Attributes().PutStr("data.source", "account_usage")
         }
     }
 }
@@ -514,55 +612,67 @@ func (s *snowflakeScraper) addCreditMetrics(scopeMetrics pmetric.ScopeMetrics, c
         // Total credits
         metric := scopeMetrics.Metrics().AppendEmpty()
         metric.SetName("snowflake.warehouse.credits.usage.total")
-        metric.SetDescription("Warehouse credit usage total")
+        metric.SetDescription("Total credits used by warehouse")
         metric.SetUnit("{credits}")
         gauge := metric.SetEmptyGauge()
         dp := gauge.DataPoints().AppendEmpty()
         dp.SetTimestamp(now)
         dp.SetDoubleValue(credit.totalCredits)
+        
         if credit.warehouseName.Valid {
             dp.Attributes().PutStr("warehouse.name", credit.warehouseName.String)
+        }
+        if credit.warehouseSize.Valid {
+            dp.Attributes().PutStr("warehouse.size", credit.warehouseSize.String)
         }
         dp.Attributes().PutStr("data.source", "account_usage")
         
         // Compute credits
         if credit.computeCredits.Valid {
-            compMetric := scopeMetrics.Metrics().AppendEmpty()
-            compMetric.SetName("snowflake.warehouse.credits.usage.compute")
-            compMetric.SetDescription("Warehouse compute credit usage")
-            compMetric.SetUnit("{credits}")
-            compGauge := compMetric.SetEmptyGauge()
-            compDp := compGauge.DataPoints().AppendEmpty()
-            compDp.SetTimestamp(now)
-            compDp.SetDoubleValue(credit.computeCredits.Float64)
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.warehouse.credits.usage.compute")
+            metric.SetDescription("Compute credits used")
+            metric.SetUnit("{credits}")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetDoubleValue(credit.computeCredits.Float64)
+            
             if credit.warehouseName.Valid {
-                compDp.Attributes().PutStr("warehouse.name", credit.warehouseName.String)
+                dp.Attributes().PutStr("warehouse.name", credit.warehouseName.String)
             }
-            compDp.Attributes().PutStr("data.source", "account_usage")
+            if credit.warehouseSize.Valid {
+                dp.Attributes().PutStr("warehouse.size", credit.warehouseSize.String)
+            }
+            dp.Attributes().PutStr("data.source", "account_usage")
         }
         
-        // Cloud services credits
+        // Cloud service credits
         if credit.cloudServiceCredits.Valid {
-            cloudMetric := scopeMetrics.Metrics().AppendEmpty()
-            cloudMetric.SetName("snowflake.warehouse.credits.usage.cloud.services")
-            cloudMetric.SetDescription("Warehouse cloud services credit usage")
-            cloudMetric.SetUnit("{credits}")
-            cloudGauge := cloudMetric.SetEmptyGauge()
-            cloudDp := cloudGauge.DataPoints().AppendEmpty()
-            cloudDp.SetTimestamp(now)
-            cloudDp.SetDoubleValue(credit.cloudServiceCredits.Float64)
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.warehouse.credits.usage.cloud.services")
+            metric.SetDescription("Cloud service credits used")
+            metric.SetUnit("{credits}")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetDoubleValue(credit.cloudServiceCredits.Float64)
+            
             if credit.warehouseName.Valid {
-                cloudDp.Attributes().PutStr("warehouse.name", credit.warehouseName.String)
+                dp.Attributes().PutStr("warehouse.name", credit.warehouseName.String)
             }
-            cloudDp.Attributes().PutStr("data.source", "account_usage")
+            if credit.warehouseSize.Valid {
+                dp.Attributes().PutStr("warehouse.size", credit.warehouseSize.String)
+            }
+            dp.Attributes().PutStr("data.source", "account_usage")
         }
     }
 }
 
 func (s *snowflakeScraper) addStorageMetrics(scopeMetrics pmetric.ScopeMetrics, storage []storageUsageRow, now pcommon.Timestamp) {
-    for _, st := range storage {
+    for _, store := range storage {
         // Total storage
-        if st.totalStorageBytes.Valid {
+        if store.totalStorageBytes.Valid {
             metric := scopeMetrics.Metrics().AppendEmpty()
             metric.SetName("snowflake.storage.bytes.total")
             metric.SetDescription("Total storage bytes")
@@ -570,51 +680,58 @@ func (s *snowflakeScraper) addStorageMetrics(scopeMetrics pmetric.ScopeMetrics, 
             gauge := metric.SetEmptyGauge()
             dp := gauge.DataPoints().AppendEmpty()
             dp.SetTimestamp(now)
-            dp.SetIntValue(int64(st.totalStorageBytes.Float64))
+            dp.SetDoubleValue(store.totalStorageBytes.Float64)
             dp.Attributes().PutStr("data.source", "account_usage")
         }
         
-        // Stage storage
-        if st.stageBytes.Valid {
-            stageMetric := scopeMetrics.Metrics().AppendEmpty()
-            stageMetric.SetName("snowflake.storage.bytes.stage")
-            stageMetric.SetDescription("Stage storage bytes")
-            stageMetric.SetUnit("By")
-            stageGauge := stageMetric.SetEmptyGauge()
-            stageDp := stageGauge.DataPoints().AppendEmpty()
-            stageDp.SetTimestamp(now)
-            stageDp.SetIntValue(int64(st.stageBytes.Float64))
-            stageDp.Attributes().PutStr("data.source", "account_usage")
+        // Stage bytes
+        if store.stageBytes.Valid {
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.storage.bytes.stage")
+            metric.SetDescription("Stage storage bytes")
+            metric.SetUnit("By")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetDoubleValue(store.stageBytes.Float64)
+            dp.Attributes().PutStr("data.source", "account_usage")
         }
         
-        // Failsafe storage
-        if st.failsafeBytes.Valid {
-            failsafeMetric := scopeMetrics.Metrics().AppendEmpty()
-            failsafeMetric.SetName("snowflake.storage.bytes.failsafe")
-            failsafeMetric.SetDescription("Failsafe storage bytes")
-            failsafeMetric.SetUnit("By")
-            failsafeGauge := failsafeMetric.SetEmptyGauge()
-            failsafeDp := failsafeGauge.DataPoints().AppendEmpty()
-            failsafeDp.SetTimestamp(now)
-            failsafeDp.SetIntValue(int64(st.failsafeBytes.Float64))
-            failsafeDp.Attributes().PutStr("data.source", "account_usage")
+        // Failsafe bytes
+        if store.failsafeBytes.Valid {
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.storage.bytes.failsafe")
+            metric.SetDescription("Failsafe storage bytes")
+            metric.SetUnit("By")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetDoubleValue(store.failsafeBytes.Float64)
+            dp.Attributes().PutStr("data.source", "account_usage")
         }
     }
 }
 
 func (s *snowflakeScraper) addLoginMetrics(scopeMetrics pmetric.ScopeMetrics, logins []loginHistoryRow, now pcommon.Timestamp) {
     for _, login := range logins {
+        userName := s.client.cardTracker.trackUser(login.userName.String)
+        
         metric := scopeMetrics.Metrics().AppendEmpty()
         metric.SetName("snowflake.logins.count")
-        metric.SetDescription("Number of login attempts")
+        metric.SetDescription("Login attempt count")
         metric.SetUnit("{logins}")
         gauge := metric.SetEmptyGauge()
         dp := gauge.DataPoints().AppendEmpty()
         dp.SetTimestamp(now)
         dp.SetIntValue(login.loginCount)
+        
+        dp.Attributes().PutStr("user.name", userName)
         dp.Attributes().PutStr("is.success", login.isSuccess)
-        if login.errorCode.Valid && login.errorCode.String != "" {
+        if login.errorCode.Valid {
             dp.Attributes().PutStr("error.code", login.errorCode.String)
+        }
+        if login.reportedClientType.Valid {
+            dp.Attributes().PutStr("client.type", login.reportedClientType.String)
         }
         dp.Attributes().PutStr("data.source", "account_usage")
     }
@@ -622,57 +739,71 @@ func (s *snowflakeScraper) addLoginMetrics(scopeMetrics pmetric.ScopeMetrics, lo
 
 func (s *snowflakeScraper) addPipeMetrics(scopeMetrics pmetric.ScopeMetrics, pipes []pipeUsageRow, now pcommon.Timestamp) {
     for _, pipe := range pipes {
-        // Pipe credits
+        databaseName := s.client.cardTracker.trackDatabase(pipe.databaseName.String)
+        schemaName := s.client.cardTracker.trackSchema(pipe.schemaName.String)
+        
+        // Credits used
         metric := scopeMetrics.Metrics().AppendEmpty()
         metric.SetName("snowflake.pipe.credits.usage")
-        metric.SetDescription("Snowpipe credit usage")
+        metric.SetDescription("Pipe credits used")
         metric.SetUnit("{credits}")
         gauge := metric.SetEmptyGauge()
         dp := gauge.DataPoints().AppendEmpty()
         dp.SetTimestamp(now)
         dp.SetDoubleValue(pipe.totalCredits)
+        
         if pipe.pipeName.Valid {
             dp.Attributes().PutStr("pipe.name", pipe.pipeName.String)
         }
+        dp.Attributes().PutStr("database.name", databaseName)
+        dp.Attributes().PutStr("schema.name", schemaName)
         dp.Attributes().PutStr("data.source", "account_usage")
         
         // Bytes inserted
         if pipe.bytesInserted.Valid {
-            bytesMetric := scopeMetrics.Metrics().AppendEmpty()
-            bytesMetric.SetName("snowflake.pipe.bytes.inserted")
-            bytesMetric.SetDescription("Bytes inserted via Snowpipe")
-            bytesMetric.SetUnit("By")
-            bytesGauge := bytesMetric.SetEmptyGauge()
-            bytesDp := bytesGauge.DataPoints().AppendEmpty()
-            bytesDp.SetTimestamp(now)
-            bytesDp.SetIntValue(int64(pipe.bytesInserted.Float64))
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.pipe.bytes.inserted")
+            metric.SetDescription("Bytes inserted by pipe")
+            metric.SetUnit("By")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetDoubleValue(pipe.bytesInserted.Float64)
+            
             if pipe.pipeName.Valid {
-                bytesDp.Attributes().PutStr("pipe.name", pipe.pipeName.String)
+                dp.Attributes().PutStr("pipe.name", pipe.pipeName.String)
             }
-            bytesDp.Attributes().PutStr("data.source", "account_usage")
+            dp.Attributes().PutStr("database.name", databaseName)
+            dp.Attributes().PutStr("schema.name", schemaName)
+            dp.Attributes().PutStr("data.source", "account_usage")
         }
         
         // Files inserted
         if pipe.filesInserted.Valid {
-            filesMetric := scopeMetrics.Metrics().AppendEmpty()
-            filesMetric.SetName("snowflake.pipe.files.inserted")
-            filesMetric.SetDescription("Files inserted via Snowpipe")
-            filesMetric.SetUnit("{files}")
-            filesGauge := filesMetric.SetEmptyGauge()
-            filesDp := filesGauge.DataPoints().AppendEmpty()
-            filesDp.SetTimestamp(now)
-            filesDp.SetIntValue(pipe.filesInserted.Int64)
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.pipe.files.inserted")
+            metric.SetDescription("Files inserted by pipe")
+            metric.SetUnit("{files}")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetIntValue(pipe.filesInserted.Int64)
+            
             if pipe.pipeName.Valid {
-                filesDp.Attributes().PutStr("pipe.name", pipe.pipeName.String)
+                dp.Attributes().PutStr("pipe.name", pipe.pipeName.String)
             }
-            filesDp.Attributes().PutStr("data.source", "account_usage")
+            dp.Attributes().PutStr("database.name", databaseName)
+            dp.Attributes().PutStr("schema.name", schemaName)
+            dp.Attributes().PutStr("data.source", "account_usage")
         }
     }
 }
 
 func (s *snowflakeScraper) addDatabaseStorageMetrics(scopeMetrics pmetric.ScopeMetrics, dbStorage []databaseStorageRow, now pcommon.Timestamp) {
     for _, db := range dbStorage {
-        // Database storage
+        databaseName := s.client.cardTracker.trackDatabase(db.databaseName.String)
+        
+        // Database bytes
         if db.avgDatabaseBytes.Valid {
             metric := scopeMetrics.Metrics().AppendEmpty()
             metric.SetName("snowflake.database.storage.bytes")
@@ -681,193 +812,219 @@ func (s *snowflakeScraper) addDatabaseStorageMetrics(scopeMetrics pmetric.ScopeM
             gauge := metric.SetEmptyGauge()
             dp := gauge.DataPoints().AppendEmpty()
             dp.SetTimestamp(now)
-            dp.SetIntValue(int64(db.avgDatabaseBytes.Float64))
-            if db.databaseName.Valid {
-                dp.Attributes().PutStr("database.name", db.databaseName.String)
-            }
+            dp.SetDoubleValue(db.avgDatabaseBytes.Float64)
+            
+            dp.Attributes().PutStr("database.name", databaseName)
             dp.Attributes().PutStr("data.source", "account_usage")
         }
         
-        // Database failsafe
+        // Failsafe bytes
         if db.avgFailsafeBytes.Valid {
-            failsafeMetric := scopeMetrics.Metrics().AppendEmpty()
-            failsafeMetric.SetName("snowflake.database.failsafe.bytes")
-            failsafeMetric.SetDescription("Database failsafe bytes")
-            failsafeMetric.SetUnit("By")
-            failsafeGauge := failsafeMetric.SetEmptyGauge()
-            failsafeDp := failsafeGauge.DataPoints().AppendEmpty()
-            failsafeDp.SetTimestamp(now)
-            failsafeDp.SetIntValue(int64(db.avgFailsafeBytes.Float64))
-            if db.databaseName.Valid {
-                failsafeDp.Attributes().PutStr("database.name", db.databaseName.String)
-            }
-            failsafeDp.Attributes().PutStr("data.source", "account_usage")
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.database.failsafe.bytes")
+            metric.SetDescription("Database failsafe bytes")
+            metric.SetUnit("By")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetDoubleValue(db.avgFailsafeBytes.Float64)
+            
+            dp.Attributes().PutStr("database.name", databaseName)
+            dp.Attributes().PutStr("data.source", "account_usage")
         }
     }
 }
 
 func (s *snowflakeScraper) addTaskHistoryMetrics(scopeMetrics pmetric.ScopeMetrics, tasks []taskHistoryRow, now pcommon.Timestamp) {
     for _, task := range tasks {
-        // Task execution count
+        databaseName := s.client.cardTracker.trackDatabase(task.databaseName.String)
+        schemaName := s.client.cardTracker.trackSchema(task.schemaName.String)
+        
+        // Execution count
         metric := scopeMetrics.Metrics().AppendEmpty()
         metric.SetName("snowflake.tasks.executions.count")
-        metric.SetDescription("Number of task executions")
+        metric.SetDescription("Task execution count")
         metric.SetUnit("{executions}")
         gauge := metric.SetEmptyGauge()
         dp := gauge.DataPoints().AppendEmpty()
         dp.SetTimestamp(now)
         dp.SetIntValue(task.executionCount)
-        if task.databaseName.Valid {
-            dp.Attributes().PutStr("database.name", task.databaseName.String)
-        }
-        if task.schemaName.Valid {
-            dp.Attributes().PutStr("schema.name", task.schemaName.String)
-        }
+        
+        dp.Attributes().PutStr("database.name", databaseName)
+        dp.Attributes().PutStr("schema.name", schemaName)
         if task.taskName.Valid {
             dp.Attributes().PutStr("task.name", task.taskName.String)
         }
         if task.state.Valid {
             dp.Attributes().PutStr("task.state", task.state.String)
         }
+        if task.warehouseName.Valid {
+            dp.Attributes().PutStr("warehouse.name", task.warehouseName.String)
+        }
+        if task.state.String == "FAILED" && task.errorCode.Valid {
+            dp.Attributes().PutStr("error.code", task.errorCode.String)
+        }
         dp.Attributes().PutStr("data.source", "account_usage")
         
-        // Task execution time
+        // Execution time
         if task.avgExecutionTime.Valid {
-            schedMetric := scopeMetrics.Metrics().AppendEmpty()
-            schedMetric.SetName("snowflake.tasks.execution.time")
-            schedMetric.SetDescription("Average task execution time")
-            schedMetric.SetUnit("ms")
-            schedGauge := schedMetric.SetEmptyGauge()
-            schedDp := schedGauge.DataPoints().AppendEmpty()
-            schedDp.SetTimestamp(now)
-            schedDp.SetIntValue(int64(task.avgExecutionTime.Float64))
-            if task.databaseName.Valid {
-                schedDp.Attributes().PutStr("database.name", task.databaseName.String)
-            }
-            if task.schemaName.Valid {
-                schedDp.Attributes().PutStr("schema.name", task.schemaName.String)
-            }
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.tasks.execution.time")
+            metric.SetDescription("Average task execution time")
+            metric.SetUnit("s")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetDoubleValue(task.avgExecutionTime.Float64)
+            
+            dp.Attributes().PutStr("database.name", databaseName)
+            dp.Attributes().PutStr("schema.name", schemaName)
             if task.taskName.Valid {
-                schedDp.Attributes().PutStr("task.name", task.taskName.String)
+                dp.Attributes().PutStr("task.name", task.taskName.String)
             }
-            schedDp.Attributes().PutStr("data.source", "account_usage")
+            if task.state.Valid {
+                dp.Attributes().PutStr("task.state", task.state.String)
+            }
+            if task.warehouseName.Valid {
+                dp.Attributes().PutStr("warehouse.name", task.warehouseName.String)
+            }
+            dp.Attributes().PutStr("data.source", "account_usage")
         }
     }
 }
 
 func (s *snowflakeScraper) addReplicationMetrics(scopeMetrics pmetric.ScopeMetrics, replications []replicationUsageRow, now pcommon.Timestamp) {
     for _, repl := range replications {
-        // Replication credits
+        databaseName := s.client.cardTracker.trackDatabase(repl.databaseName.String)
+        
+        // Credits used
         metric := scopeMetrics.Metrics().AppendEmpty()
         metric.SetName("snowflake.replication.credits.usage")
-        metric.SetDescription("Database replication credit usage")
+        metric.SetDescription("Replication credits used")
         metric.SetUnit("{credits}")
         gauge := metric.SetEmptyGauge()
         dp := gauge.DataPoints().AppendEmpty()
         dp.SetTimestamp(now)
         dp.SetDoubleValue(repl.totalCredits)
-        if repl.databaseName.Valid {
-            dp.Attributes().PutStr("database.name", repl.databaseName.String)
+        
+        dp.Attributes().PutStr("database.name", databaseName)
+        if repl.sourceAccount.Valid {
+            dp.Attributes().PutStr("source.account", repl.sourceAccount.String)
+        }
+        if repl.targetAccount.Valid {
+            dp.Attributes().PutStr("target.account", repl.targetAccount.String)
+        }
+        if repl.sourceRegion.Valid {
+            dp.Attributes().PutStr("source.region", repl.sourceRegion.String)
+        }
+        if repl.targetRegion.Valid {
+            dp.Attributes().PutStr("target.region", repl.targetRegion.String)
         }
         dp.Attributes().PutStr("data.source", "account_usage")
         
         // Bytes transferred
         if repl.bytesTransferred.Valid {
-            bytesMetric := scopeMetrics.Metrics().AppendEmpty()
-            bytesMetric.SetName("snowflake.replication.bytes.transferred")
-            bytesMetric.SetDescription("Bytes transferred via replication")
-            bytesMetric.SetUnit("By")
-            bytesGauge := bytesMetric.SetEmptyGauge()
-            bytesDp := bytesGauge.DataPoints().AppendEmpty()
-            bytesDp.SetTimestamp(now)
-            bytesDp.SetIntValue(int64(repl.bytesTransferred.Float64))
-            if repl.databaseName.Valid {
-                bytesDp.Attributes().PutStr("database.name", repl.databaseName.String)
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.replication.bytes.transferred")
+            metric.SetDescription("Bytes transferred in replication")
+            metric.SetUnit("By")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetDoubleValue(repl.bytesTransferred.Float64)
+            
+            dp.Attributes().PutStr("database.name", databaseName)
+            if repl.sourceAccount.Valid {
+                dp.Attributes().PutStr("source.account", repl.sourceAccount.String)
             }
-            bytesDp.Attributes().PutStr("data.source", "account_usage")
+            if repl.targetAccount.Valid {
+                dp.Attributes().PutStr("target.account", repl.targetAccount.String)
+            }
+            if repl.sourceRegion.Valid {
+                dp.Attributes().PutStr("source.region", repl.sourceRegion.String)
+            }
+            if repl.targetRegion.Valid {
+                dp.Attributes().PutStr("target.region", repl.targetRegion.String)
+            }
+            dp.Attributes().PutStr("data.source", "account_usage")
         }
     }
 }
 
 func (s *snowflakeScraper) addAutoClusteringMetrics(scopeMetrics pmetric.ScopeMetrics, clusterings []autoClusteringRow, now pcommon.Timestamp) {
     for _, cluster := range clusterings {
-        // Auto-clustering credits
+        databaseName := s.client.cardTracker.trackDatabase(cluster.databaseName.String)
+        schemaName := s.client.cardTracker.trackSchema(cluster.schemaName.String)
+        
+        // Credits used
         metric := scopeMetrics.Metrics().AppendEmpty()
         metric.SetName("snowflake.clustering.auto.credits.usage")
-        metric.SetDescription("Auto-clustering credit usage")
+        metric.SetDescription("Auto-clustering credits used")
         metric.SetUnit("{credits}")
         gauge := metric.SetEmptyGauge()
         dp := gauge.DataPoints().AppendEmpty()
         dp.SetTimestamp(now)
         dp.SetDoubleValue(cluster.totalCredits)
-        if cluster.databaseName.Valid {
-            dp.Attributes().PutStr("database.name", cluster.databaseName.String)
-        }
-        if cluster.schemaName.Valid {
-            dp.Attributes().PutStr("schema.name", cluster.schemaName.String)
-        }
+        
+        dp.Attributes().PutStr("database.name", databaseName)
+        dp.Attributes().PutStr("schema.name", schemaName)
         if cluster.tableName.Valid {
             dp.Attributes().PutStr("table.name", cluster.tableName.String)
+        }
+        if cluster.warehouseName.Valid {
+            dp.Attributes().PutStr("warehouse.name", cluster.warehouseName.String)
         }
         dp.Attributes().PutStr("data.source", "account_usage")
         
         // Bytes reclustered
         if cluster.bytesReclustered.Valid {
-            bytesMetric := scopeMetrics.Metrics().AppendEmpty()
-            bytesMetric.SetName("snowflake.clustering.auto.bytes.reclustered")
-            bytesMetric.SetDescription("Bytes reclustered by auto-clustering")
-            bytesMetric.SetUnit("By")
-            bytesGauge := bytesMetric.SetEmptyGauge()
-            bytesDp := bytesGauge.DataPoints().AppendEmpty()
-            bytesDp.SetTimestamp(now)
-            bytesDp.SetIntValue(int64(cluster.bytesReclustered.Float64))
-            if cluster.databaseName.Valid {
-                bytesDp.Attributes().PutStr("database.name", cluster.databaseName.String)
-            }
-            if cluster.schemaName.Valid {
-                bytesDp.Attributes().PutStr("schema.name", cluster.schemaName.String)
-            }
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.clustering.auto.bytes.reclustered")
+            metric.SetDescription("Bytes reclustered")
+            metric.SetUnit("By")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetDoubleValue(cluster.bytesReclustered.Float64)
+            
+            dp.Attributes().PutStr("database.name", databaseName)
+            dp.Attributes().PutStr("schema.name", schemaName)
             if cluster.tableName.Valid {
-                bytesDp.Attributes().PutStr("table.name", cluster.tableName.String)
+                dp.Attributes().PutStr("table.name", cluster.tableName.String)
             }
-            bytesDp.Attributes().PutStr("data.source", "account_usage")
+            dp.Attributes().PutStr("data.source", "account_usage")
         }
         
         // Rows reclustered
         if cluster.rowsReclustered.Valid {
-            rowsMetric := scopeMetrics.Metrics().AppendEmpty()
-            rowsMetric.SetName("snowflake.clustering.auto.rows.reclustered")
-            rowsMetric.SetDescription("Rows reclustered by auto-clustering")
-            rowsMetric.SetUnit("{rows}")
-            rowsGauge := rowsMetric.SetEmptyGauge()
-            rowsDp := rowsGauge.DataPoints().AppendEmpty()
-            rowsDp.SetTimestamp(now)
-            rowsDp.SetIntValue(int64(cluster.rowsReclustered.Float64))
-            if cluster.databaseName.Valid {
-                rowsDp.Attributes().PutStr("database.name", cluster.databaseName.String)
-            }
-            if cluster.schemaName.Valid {
-                rowsDp.Attributes().PutStr("schema.name", cluster.schemaName.String)
-            }
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.clustering.auto.rows.reclustered")
+            metric.SetDescription("Rows reclustered")
+            metric.SetUnit("{rows}")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetDoubleValue(cluster.rowsReclustered.Float64)
+            
+            dp.Attributes().PutStr("database.name", databaseName)
+            dp.Attributes().PutStr("schema.name", schemaName)
             if cluster.tableName.Valid {
-                rowsDp.Attributes().PutStr("table.name", cluster.tableName.String)
+                dp.Attributes().PutStr("table.name", cluster.tableName.String)
             }
-            rowsDp.Attributes().PutStr("data.source", "account_usage")
+            dp.Attributes().PutStr("data.source", "account_usage")
         }
     }
 }
 
-// ========== EVENT TABLES Metrics (SECONDS-LEVEL LATENCY!) ==========
-
 func (s *snowflakeScraper) addEventTableMetrics(scopeMetrics pmetric.ScopeMetrics, events []eventTableRow, now pcommon.Timestamp) {
+    // Group events by type and severity
     eventCounts := make(map[string]map[string]int64)
     
     for _, event := range events {
         if _, exists := eventCounts[event.eventType]; !exists {
             eventCounts[event.eventType] = make(map[string]int64)
         }
-        
-        severity := "INFO"
+        severity := "UNKNOWN"
         if event.severity.Valid {
             severity = event.severity.String
         }
@@ -877,121 +1034,102 @@ func (s *snowflakeScraper) addEventTableMetrics(scopeMetrics pmetric.ScopeMetric
     for eventType, severityCounts := range eventCounts {
         for severity, count := range severityCounts {
             metric := scopeMetrics.Metrics().AppendEmpty()
-            metric.SetName(fmt.Sprintf("snowflake.events.%s.count", eventType))
-            metric.SetDescription(fmt.Sprintf("Event table %s event count (REAL-TIME)", eventType))
+            metric.SetName("snowflake.events." + eventType + ".count")
+            metric.SetDescription("Event count by type and severity")
             metric.SetUnit("{events}")
             gauge := metric.SetEmptyGauge()
             dp := gauge.DataPoints().AppendEmpty()
             dp.SetTimestamp(now)
             dp.SetIntValue(count)
+            
             dp.Attributes().PutStr("event.type", eventType)
             dp.Attributes().PutStr("severity", severity)
             dp.Attributes().PutStr("data.source", "event_table")
         }
     }
-    
-    errorCount := int64(0)
-    for _, event := range events {
-        if event.errorMessage.Valid && event.errorMessage.String != "" {
-            errorCount++
-        }
-    }
-    
-    if errorCount > 0 {
-        errorMetric := scopeMetrics.Metrics().AppendEmpty()
-        errorMetric.SetName("snowflake.events.errors.count")
-        errorMetric.SetDescription("Event table error count (REAL-TIME)")
-        errorMetric.SetUnit("{errors}")
-        gauge := errorMetric.SetEmptyGauge()
-        dp := gauge.DataPoints().AppendEmpty()
-        dp.SetTimestamp(now)
-        dp.SetIntValue(errorCount)
-        dp.Attributes().PutStr("data.source", "event_table")
-    }
 }
 
-// ========== ORGANIZATION Metrics (Multi-Account) ==========
-
 func (s *snowflakeScraper) addOrgCreditMetrics(scopeMetrics pmetric.ScopeMetrics, orgCredits []orgCreditUsageRow, now pcommon.Timestamp) {
-    for _, credit := range orgCredits {
+    for _, org := range orgCredits {
         metric := scopeMetrics.Metrics().AppendEmpty()
         metric.SetName("snowflake.organization.credits.usage")
-        metric.SetDescription("Organization-level credit usage")
+        metric.SetDescription("Organization credits usage")
         metric.SetUnit("{credits}")
         gauge := metric.SetEmptyGauge()
         dp := gauge.DataPoints().AppendEmpty()
         dp.SetTimestamp(now)
-        dp.SetDoubleValue(credit.totalCredits)
-        if credit.organizationName.Valid {
-            dp.Attributes().PutStr("organization.name", credit.organizationName.String)
+        dp.SetDoubleValue(org.totalCredits)
+        
+        if org.organizationName.Valid {
+            dp.Attributes().PutStr("organization.name", org.organizationName.String)
         }
-        if credit.accountName.Valid {
-            dp.Attributes().PutStr("account.name", credit.accountName.String)
+        if org.accountName.Valid {
+            dp.Attributes().PutStr("account.name", org.accountName.String)
         }
-        if credit.serviceType.Valid {
-            dp.Attributes().PutStr("service.type", credit.serviceType.String)
+        if org.serviceType.Valid {
+            dp.Attributes().PutStr("service.type", org.serviceType.String)
         }
         dp.Attributes().PutStr("data.source", "organization_usage")
     }
 }
 
 func (s *snowflakeScraper) addOrgStorageMetrics(scopeMetrics pmetric.ScopeMetrics, orgStorage []orgStorageUsageRow, now pcommon.Timestamp) {
-    for _, storage := range orgStorage {
-        // Total storage
-        if storage.avgStorageBytes.Valid {
+    for _, org := range orgStorage {
+        if org.avgStorageBytes.Valid {
             metric := scopeMetrics.Metrics().AppendEmpty()
             metric.SetName("snowflake.organization.storage.bytes.total")
-            metric.SetDescription("Organization-level total storage")
+            metric.SetDescription("Organization total storage bytes")
             metric.SetUnit("By")
             gauge := metric.SetEmptyGauge()
             dp := gauge.DataPoints().AppendEmpty()
             dp.SetTimestamp(now)
-            dp.SetIntValue(int64(storage.avgStorageBytes.Float64))
-            if storage.organizationName.Valid {
-                dp.Attributes().PutStr("organization.name", storage.organizationName.String)
+            dp.SetDoubleValue(org.avgStorageBytes.Float64)
+            
+            if org.organizationName.Valid {
+                dp.Attributes().PutStr("organization.name", org.organizationName.String)
             }
-            if storage.accountName.Valid {
-                dp.Attributes().PutStr("account.name", storage.accountName.String)
+            if org.accountName.Valid {
+                dp.Attributes().PutStr("account.name", org.accountName.String)
             }
             dp.Attributes().PutStr("data.source", "organization_usage")
         }
         
-        // Stage storage
-        if storage.avgStageBytes.Valid {
-            stageMetric := scopeMetrics.Metrics().AppendEmpty()
-            stageMetric.SetName("snowflake.organization.storage.bytes.stage")
-            stageMetric.SetDescription("Organization-level stage storage")
-            stageMetric.SetUnit("By")
-            stageGauge := stageMetric.SetEmptyGauge()
-            stageDp := stageGauge.DataPoints().AppendEmpty()
-            stageDp.SetTimestamp(now)
-            stageDp.SetIntValue(int64(storage.avgStageBytes.Float64))
-            if storage.organizationName.Valid {
-                stageDp.Attributes().PutStr("organization.name", storage.organizationName.String)
+        if org.avgStageBytes.Valid {
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.organization.storage.bytes.stage")
+            metric.SetDescription("Organization stage storage bytes")
+            metric.SetUnit("By")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetDoubleValue(org.avgStageBytes.Float64)
+            
+            if org.organizationName.Valid {
+                dp.Attributes().PutStr("organization.name", org.organizationName.String)
             }
-            if storage.accountName.Valid {
-                stageDp.Attributes().PutStr("account.name", storage.accountName.String)
+            if org.accountName.Valid {
+                dp.Attributes().PutStr("account.name", org.accountName.String)
             }
-            stageDp.Attributes().PutStr("data.source", "organization_usage")
+            dp.Attributes().PutStr("data.source", "organization_usage")
         }
         
-        // Failsafe storage
-        if storage.avgFailsafeBytes.Valid {
-            failsafeMetric := scopeMetrics.Metrics().AppendEmpty()
-            failsafeMetric.SetName("snowflake.organization.storage.bytes.failsafe")
-            failsafeMetric.SetDescription("Organization-level failsafe storage")
-            failsafeMetric.SetUnit("By")
-            failsafeGauge := failsafeMetric.SetEmptyGauge()
-            failsafeDp := failsafeGauge.DataPoints().AppendEmpty()
-            failsafeDp.SetTimestamp(now)
-            failsafeDp.SetIntValue(int64(storage.avgFailsafeBytes.Float64))
-            if storage.organizationName.Valid {
-                failsafeDp.Attributes().PutStr("organization.name", storage.organizationName.String)
+        if org.avgFailsafeBytes.Valid {
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.organization.storage.bytes.failsafe")
+            metric.SetDescription("Organization failsafe storage bytes")
+            metric.SetUnit("By")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetDoubleValue(org.avgFailsafeBytes.Float64)
+            
+            if org.organizationName.Valid {
+                dp.Attributes().PutStr("organization.name", org.organizationName.String)
             }
-            if storage.accountName.Valid {
-                failsafeDp.Attributes().PutStr("account.name", storage.accountName.String)
+            if org.accountName.Valid {
+                dp.Attributes().PutStr("account.name", org.accountName.String)
             }
-            failsafeDp.Attributes().PutStr("data.source", "organization_usage")
+            dp.Attributes().PutStr("data.source", "organization_usage")
         }
     }
 }
@@ -1001,12 +1139,13 @@ func (s *snowflakeScraper) addOrgDataTransferMetrics(scopeMetrics pmetric.ScopeM
         if transfer.totalBytesTransferred.Valid {
             metric := scopeMetrics.Metrics().AppendEmpty()
             metric.SetName("snowflake.organization.data.transfer.bytes")
-            metric.SetDescription("Organization-level cross-account data transfer")
+            metric.SetDescription("Organization data transfer bytes")
             metric.SetUnit("By")
             gauge := metric.SetEmptyGauge()
             dp := gauge.DataPoints().AppendEmpty()
             dp.SetTimestamp(now)
-            dp.SetIntValue(int64(transfer.totalBytesTransferred.Float64))
+            dp.SetDoubleValue(transfer.totalBytesTransferred.Float64)
+            
             if transfer.organizationName.Valid {
                 dp.Attributes().PutStr("organization.name", transfer.organizationName.String)
             }
@@ -1027,132 +1166,37 @@ func (s *snowflakeScraper) addOrgDataTransferMetrics(scopeMetrics pmetric.ScopeM
     }
 }
 
-func (s *snowflakeScraper) addOrgContractMetrics(scopeMetrics pmetric.ScopeMetrics, contracts []orgContractUsageRow, now pcommon.Timestamp) {
-    for _, contract := range contracts {
-        // Credits used
-        metric := scopeMetrics.Metrics().AppendEmpty()
-        metric.SetName("snowflake.organization.contract.credits.used")
-        metric.SetDescription("Organization contract credits used")
-        metric.SetUnit("{credits}")
-        gauge := metric.SetEmptyGauge()
-        dp := gauge.DataPoints().AppendEmpty()
-        dp.SetTimestamp(now)
-        dp.SetDoubleValue(contract.totalCreditsUsed)
-        if contract.organizationName.Valid {
-            dp.Attributes().PutStr("organization.name", contract.organizationName.String)
-        }
-        if contract.contractNumber.Valid {
-            dp.Attributes().PutStr("contract.number", fmt.Sprintf("%d", contract.contractNumber.Int64))
-        }
-        dp.Attributes().PutStr("data.source", "organization_usage")
-        
-        // Credits billed
-        if contract.totalCreditsBilled.Valid {
-            billedMetric := scopeMetrics.Metrics().AppendEmpty()
-            billedMetric.SetName("snowflake.organization.contract.credits.billed")
-            billedMetric.SetDescription("Organization contract credits billed")
-            billedMetric.SetUnit("{credits}")
-            billedGauge := billedMetric.SetEmptyGauge()
-            billedDp := billedGauge.DataPoints().AppendEmpty()
-            billedDp.SetTimestamp(now)
-            billedDp.SetDoubleValue(contract.totalCreditsBilled.Float64)
-            if contract.organizationName.Valid {
-                billedDp.Attributes().PutStr("organization.name", contract.organizationName.String)
-            }
-            if contract.contractNumber.Valid {
-                billedDp.Attributes().PutStr("contract.number", fmt.Sprintf("%d", contract.contractNumber.Int64))
-            }
-            billedDp.Attributes().PutStr("data.source", "organization_usage")
-        }
-    }
-}
-
-// ========== CUSTOM QUERIES ==========
-
 func (s *snowflakeScraper) addCustomQueryMetrics(scopeMetrics pmetric.ScopeMetrics, result customQueryResult, now pcommon.Timestamp) {
-    metricType := result.metricType
-    if metricType == "" {
-        metricType = "gauge"
-    }
-    
-    var queryConfig *CustomQuery
-    for i := range s.config.CustomQueries.Queries {
-        if s.config.CustomQueries.Queries[i].Name == result.name {
-            queryConfig = &s.config.CustomQueries.Queries[i]
-            break
-        }
-    }
-    
-    if queryConfig == nil {
-        s.logger.Warn("Custom query config not found", zap.String("query_name", result.name))
-        return
-    }
-    
     for _, row := range result.rows {
         metric := scopeMetrics.Metrics().AppendEmpty()
-        metric.SetName(fmt.Sprintf("snowflake.custom.%s", result.name))
-        metric.SetDescription(fmt.Sprintf("Custom query: %s", result.name))
+        metric.SetName("snowflake.custom." + result.name)
+        metric.SetDescription("Custom query metric: " + result.name)
         metric.SetUnit("1")
         
-        valueInterface, exists := row[queryConfig.ValueColumn]
-        if !exists {
-            s.logger.Warn("Value column not found in query result",
-                zap.String("query_name", result.name),
-                zap.String("value_column", queryConfig.ValueColumn))
-            continue
-        }
-        
-        gauge := metric.SetEmptyGauge()
-        dp := gauge.DataPoints().AppendEmpty()
-        dp.SetTimestamp(now)
-        
-        var floatValue float64
-        switch v := valueInterface.(type) {
-        case float64:
-            floatValue = v
-        case float32:
-            floatValue = float64(v)
-        case int64:
-            floatValue = float64(v)
-        case int32:
-            floatValue = float64(v)
-        case int:
-            floatValue = float64(v)
-        case string:
-            parsed, err := strconv.ParseFloat(v, 64)
-            if err != nil {
-                s.logger.Warn("Failed to parse string value to float",
-                    zap.String("query_name", result.name),
-                    zap.String("value", v),
-                    zap.Error(err))
-                continue
-            }
-            floatValue = parsed
-        case []byte:
-            parsed, err := strconv.ParseFloat(string(v), 64)
-            if err != nil {
-                s.logger.Warn("Failed to parse byte value to float",
-                    zap.String("query_name", result.name),
-                    zap.Error(err))
-                continue
-            }
-            floatValue = parsed
-        default:
-            s.logger.Warn("Unsupported value type in custom query",
-                zap.String("query_name", result.name),
-                zap.String("type", fmt.Sprintf("%T", v)),
-                zap.Any("value", v))
-            continue
-        }
-        
-        dp.SetDoubleValue(floatValue)
-        
-        for _, labelCol := range queryConfig.LabelColumns {
-            if labelValue, exists := row[labelCol]; exists && labelValue != nil {
-                dp.Attributes().PutStr(labelCol, fmt.Sprintf("%v", labelValue))
+        switch result.metricType {
+        case "gauge":
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            
+            // Try to extract value
+            for k, v := range row {
+                switch val := v.(type) {
+                case float64:
+                    dp.SetDoubleValue(val)
+                case int64:
+                    dp.SetIntValue(val)
+                case int:
+                    dp.SetIntValue(int64(val))
+                }
+                // Add all columns as attributes
+                dp.Attributes().PutStr(k, fmt.Sprintf("%v", v))
             }
         }
-        
-        dp.Attributes().PutStr("data.source", "custom_query")
     }
 }
+
+// ============================================================================
+// SELF-MONITORING METRICS
+// ============================================================================
+
