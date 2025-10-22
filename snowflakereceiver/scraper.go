@@ -1,4 +1,3 @@
-
 package snowflakereceiver
 
 import (
@@ -545,6 +544,36 @@ func (s *snowflakeScraper) addQueryMetrics(scopeMetrics pmetric.ScopeMetrics, st
             dp.Attributes().PutStr("data.source", "account_usage")
         }
         
+        // Bytes deleted
+        if stat.avgBytesDeleted.Valid {
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.queries.bytes.deleted")
+            metric.SetDescription("Average bytes deleted")
+            metric.SetUnit("By")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetDoubleValue(stat.avgBytesDeleted.Float64)
+            
+            if stat.warehouseName.Valid {
+                dp.Attributes().PutStr("warehouse.name", stat.warehouseName.String)
+            }
+            if stat.warehouseSize.Valid {
+                dp.Attributes().PutStr("warehouse.size", stat.warehouseSize.String)
+            }
+            if stat.queryType.Valid {
+                dp.Attributes().PutStr("query.type", stat.queryType.String)
+            }
+            if stat.executionStatus.Valid {
+                dp.Attributes().PutStr("execution.status", stat.executionStatus.String)
+            }
+            dp.Attributes().PutStr("database.name", databaseName)
+            dp.Attributes().PutStr("schema.name", schemaName)
+            dp.Attributes().PutStr("user.name", userName)
+            dp.Attributes().PutStr("role.name", roleName)
+            dp.Attributes().PutStr("data.source", "account_usage")
+        }
+        
         // Rows produced
         if stat.avgRowsProduced.Valid {
             metric := scopeMetrics.Metrics().AppendEmpty()
@@ -555,6 +584,66 @@ func (s *snowflakeScraper) addQueryMetrics(scopeMetrics pmetric.ScopeMetrics, st
             dp := gauge.DataPoints().AppendEmpty()
             dp.SetTimestamp(now)
             dp.SetDoubleValue(stat.avgRowsProduced.Float64)
+            
+            if stat.warehouseName.Valid {
+                dp.Attributes().PutStr("warehouse.name", stat.warehouseName.String)
+            }
+            if stat.warehouseSize.Valid {
+                dp.Attributes().PutStr("warehouse.size", stat.warehouseSize.String)
+            }
+            if stat.queryType.Valid {
+                dp.Attributes().PutStr("query.type", stat.queryType.String)
+            }
+            if stat.executionStatus.Valid {
+                dp.Attributes().PutStr("execution.status", stat.executionStatus.String)
+            }
+            dp.Attributes().PutStr("database.name", databaseName)
+            dp.Attributes().PutStr("schema.name", schemaName)
+            dp.Attributes().PutStr("user.name", userName)
+            dp.Attributes().PutStr("role.name", roleName)
+            dp.Attributes().PutStr("data.source", "account_usage")
+        }
+        
+        // Bytes spilled to local storage
+        if stat.avgBytesSpilledLocal.Valid {
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.queries.bytes.spilled.local")
+            metric.SetDescription("Average bytes spilled to local storage (performance warning)")
+            metric.SetUnit("By")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetDoubleValue(stat.avgBytesSpilledLocal.Float64)
+            
+            if stat.warehouseName.Valid {
+                dp.Attributes().PutStr("warehouse.name", stat.warehouseName.String)
+            }
+            if stat.warehouseSize.Valid {
+                dp.Attributes().PutStr("warehouse.size", stat.warehouseSize.String)
+            }
+            if stat.queryType.Valid {
+                dp.Attributes().PutStr("query.type", stat.queryType.String)
+            }
+            if stat.executionStatus.Valid {
+                dp.Attributes().PutStr("execution.status", stat.executionStatus.String)
+            }
+            dp.Attributes().PutStr("database.name", databaseName)
+            dp.Attributes().PutStr("schema.name", schemaName)
+            dp.Attributes().PutStr("user.name", userName)
+            dp.Attributes().PutStr("role.name", roleName)
+            dp.Attributes().PutStr("data.source", "account_usage")
+        }
+        
+        // Bytes spilled to remote storage
+        if stat.avgBytesSpilledRemote.Valid {
+            metric := scopeMetrics.Metrics().AppendEmpty()
+            metric.SetName("snowflake.queries.bytes.spilled.remote")
+            metric.SetDescription("Average bytes spilled to remote storage (critical performance issue)")
+            metric.SetUnit("By")
+            gauge := metric.SetEmptyGauge()
+            dp := gauge.DataPoints().AppendEmpty()
+            dp.SetTimestamp(now)
+            dp.SetDoubleValue(stat.avgBytesSpilledRemote.Float64)
             
             if stat.warehouseName.Valid {
                 dp.Attributes().PutStr("warehouse.name", stat.warehouseName.String)
@@ -1242,4 +1331,6 @@ func (s *snowflakeScraper) addCustomQueryMetrics(scopeMetrics pmetric.ScopeMetri
 // ============================================================================
 // SELF-MONITORING METRICS
 // ============================================================================
+
+
 

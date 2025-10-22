@@ -1,6 +1,3 @@
-// Copyright The OpenTelemetry Authors
-// SPDX-License-Identifier: Apache-2.0
-
 package snowflakereceiver
 
 import (
@@ -86,21 +83,24 @@ type warehouseLoadRow struct {
 }
 
 type queryStatRow struct {
-    warehouseName      sql.NullString
-    warehouseSize      sql.NullString  // ⭐ NEW
-    queryType          sql.NullString
-    executionStatus    sql.NullString
-    databaseName       sql.NullString  // ⭐ NEW
-    schemaName         sql.NullString  // ⭐ NEW
-    userName           sql.NullString  // ⭐ NEW
-    roleName           sql.NullString  // ⭐ NEW
-    errorCode          sql.NullString  // ⭐ NEW
-    queryCount         int64
-    avgExecutionTime   sql.NullFloat64
-    avgBytesScanned    sql.NullFloat64
-    avgBytesWritten    sql.NullFloat64
-    avgRowsProduced    sql.NullFloat64
-    avgCompilationTime sql.NullFloat64
+    warehouseName           sql.NullString
+    warehouseSize           sql.NullString  
+    queryType               sql.NullString
+    executionStatus         sql.NullString
+    databaseName            sql.NullString  
+    schemaName              sql.NullString  
+    userName                sql.NullString  
+    roleName                sql.NullString  
+    errorCode               sql.NullString  
+    queryCount              int64
+    avgExecutionTime        sql.NullFloat64
+    avgBytesScanned         sql.NullFloat64
+    avgBytesWritten         sql.NullFloat64
+    avgBytesDeleted         sql.NullFloat64  // ADD THIS
+    avgBytesSpilledLocal    sql.NullFloat64  // ADD THIS
+    avgBytesSpilledRemote   sql.NullFloat64  // ADD THIS
+    avgRowsProduced         sql.NullFloat64
+    avgCompilationTime      sql.NullFloat64
 }
 
 type creditUsageRow struct {
@@ -641,6 +641,9 @@ func (c *snowflakeClient) queryQueryStats(ctx context.Context, metrics *snowflak
             AVG(TOTAL_ELAPSED_TIME) as AVG_EXECUTION_TIME,
             AVG(BYTES_SCANNED) as AVG_BYTES_SCANNED,
             AVG(BYTES_WRITTEN) as AVG_BYTES_WRITTEN,
+            AVG(BYTES_DELETED) as AVG_BYTES_DELETED,
+            AVG(BYTES_SPILLED_TO_LOCAL_STORAGE) as AVG_BYTES_SPILLED_LOCAL,
+            AVG(BYTES_SPILLED_TO_REMOTE_STORAGE) as AVG_BYTES_SPILLED_REMOTE,
             AVG(ROWS_PRODUCED) as AVG_ROWS_PRODUCED,
             AVG(COMPILATION_TIME) as AVG_COMPILATION_TIME
         FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
@@ -672,6 +675,9 @@ func (c *snowflakeClient) queryQueryStats(ctx context.Context, metrics *snowflak
             &row.avgExecutionTime,
             &row.avgBytesScanned,
             &row.avgBytesWritten,
+            &row.avgBytesDeleted,
+            &row.avgBytesSpilledLocal,
+            &row.avgBytesSpilledRemote,
             &row.avgRowsProduced,
             &row.avgCompilationTime,
         ); err != nil {
@@ -1341,3 +1347,4 @@ func (c *snowflakeClient) getCardinalityStats() map[string]int {
 func (c *snowflakeClient) getDroppedCounts() map[string]int64 {
     return c.cardTracker.getDroppedCounts()
 }
+
