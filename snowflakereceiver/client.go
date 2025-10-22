@@ -587,14 +587,13 @@ func (c *snowflakeClient) queryWarehouseLoad(ctx context.Context, metrics *snowf
     query := `
         SELECT 
             WAREHOUSE_NAME,
-            WAREHOUSE_SIZE,
             AVG(AVG_RUNNING) as AVG_RUNNING,
             AVG(AVG_QUEUED_LOAD) as AVG_QUEUED_LOAD,
             AVG(AVG_QUEUED_PROVISIONING) as AVG_QUEUED_PROVISIONING,
             AVG(AVG_BLOCKED) as AVG_BLOCKED
         FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.WAREHOUSE_LOAD_HISTORY())
         WHERE START_TIME >= DATEADD(minute, -5, CURRENT_TIMESTAMP())
-        GROUP BY WAREHOUSE_NAME, WAREHOUSE_SIZE
+        GROUP BY WAREHOUSE_NAME
         LIMIT ?
     `
     
@@ -608,7 +607,6 @@ func (c *snowflakeClient) queryWarehouseLoad(ctx context.Context, metrics *snowf
         var row warehouseLoadRow
         if err := rows.Scan(
             &row.warehouseName,
-            &row.warehouseSize,
             &row.avgRunning,
             &row.avgQueuedLoad,
             &row.avgQueuedProvisioning,
@@ -694,13 +692,12 @@ func (c *snowflakeClient) queryCreditUsage(ctx context.Context, metrics *snowfla
     query := `
         SELECT 
             WAREHOUSE_NAME,
-            WAREHOUSE_SIZE,
             SUM(CREDITS_USED) as TOTAL_CREDITS,
             SUM(CREDITS_USED_COMPUTE) as COMPUTE_CREDITS,
             SUM(CREDITS_USED_CLOUD_SERVICES) as CLOUD_SERVICE_CREDITS
         FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
         WHERE START_TIME >= DATEADD(hour, -1, CURRENT_TIMESTAMP())
-        GROUP BY WAREHOUSE_NAME, WAREHOUSE_SIZE
+        GROUP BY WAREHOUSE_NAME
         LIMIT ?
     `
     
@@ -714,7 +711,6 @@ func (c *snowflakeClient) queryCreditUsage(ctx context.Context, metrics *snowfla
         var row creditUsageRow
         if err := rows.Scan(
             &row.warehouseName,
-            &row.warehouseSize,
             &row.totalCredits,
             &row.computeCredits,
             &row.cloudServiceCredits,
@@ -814,14 +810,12 @@ func (c *snowflakeClient) queryPipeUsage(ctx context.Context, metrics *snowflake
     query := `
         SELECT 
             PIPE_NAME,
-            DATABASE_NAME,
-            SCHEMA_NAME,
             SUM(CREDITS_USED) as TOTAL_CREDITS,
             SUM(BYTES_INSERTED) as BYTES_INSERTED,
             SUM(FILES_INSERTED) as FILES_INSERTED
         FROM SNOWFLAKE.ACCOUNT_USAGE.PIPE_USAGE_HISTORY
         WHERE START_TIME >= DATEADD(hour, -1, CURRENT_TIMESTAMP())
-        GROUP BY PIPE_NAME, DATABASE_NAME, SCHEMA_NAME
+        GROUP BY PIPE_NAME
         LIMIT ?
     `
     
@@ -835,8 +829,6 @@ func (c *snowflakeClient) queryPipeUsage(ctx context.Context, metrics *snowflake
         var row pipeUsageRow
         if err := rows.Scan(
             &row.pipeName,
-            &row.databaseName,
-            &row.schemaName,
             &row.totalCredits,
             &row.bytesInserted,
             &row.filesInserted,
@@ -949,15 +941,11 @@ func (c *snowflakeClient) queryReplicationUsage(ctx context.Context, metrics *sn
     query := `
         SELECT 
             DATABASE_NAME,
-            REPLICATION_GROUP_NAME as SOURCE_ACCOUNT,
-            '' as TARGET_ACCOUNT,
-            SOURCE_CLOUD as SOURCE_REGION,
-            TARGET_CLOUD as TARGET_REGION,
             SUM(CREDITS_USED) as TOTAL_CREDITS,
             SUM(BYTES_TRANSFERRED) as BYTES_TRANSFERRED
         FROM SNOWFLAKE.ACCOUNT_USAGE.REPLICATION_USAGE_HISTORY
         WHERE START_TIME >= DATEADD(hour, -1, CURRENT_TIMESTAMP())
-        GROUP BY DATABASE_NAME, REPLICATION_GROUP_NAME, SOURCE_CLOUD, TARGET_CLOUD
+        GROUP BY DATABASE_NAME
         LIMIT ?
     `
     
@@ -971,10 +959,6 @@ func (c *snowflakeClient) queryReplicationUsage(ctx context.Context, metrics *sn
         var row replicationUsageRow
         if err := rows.Scan(
             &row.databaseName,
-            &row.sourceAccount,
-            &row.targetAccount,
-            &row.sourceRegion,
-            &row.targetRegion,
             &row.totalCredits,
             &row.bytesTransferred,
         ); err != nil {
