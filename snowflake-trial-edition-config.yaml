@@ -1,0 +1,222 @@
+# ============================================================================
+# SNOWFLAKE RECEIVER CONFIG - TRIAL ACCOUNT OPTIMIZED
+# ============================================================================
+# This config is optimized for Snowflake trial accounts based on actual
+# data availability. Only collects metrics from tables that have data.
+#
+# Validated tables with data:
+# - current_queries (100 rows) - Real-time operational monitoring
+# - warehouse_load (121 rows) - Real-time warehouse performance
+# - query_history (375 rows) - Historical query analytics
+# - credit_usage (19 rows) - Cost tracking
+# - login_history (32 rows) - Security monitoring
+# - storage_metrics (6 rows) - Storage trends
+# - database_storage (1 row) - Database-level storage
+# - task_history (8 rows) - Task execution tracking
+#
+# Disabled (no data in trial):
+# - pipe_usage (requires Snowpipe setup)
+# - replication_usage (requires replication setup)
+# - auto_clustering (Enterprise feature)
+# - organization metrics (requires multi-account Enterprise)
+# - event_tables (requires Event Table setup)
+# ============================================================================
+
+receivers:
+  snowflake:
+    # ========================================================================
+    # CONNECTION SETTINGS
+    # ========================================================================
+    user: "YOUR_SNOWFLAKE_USER"
+    password: "YOUR_SNOWFLAKE_PASSWORD"
+    account: "your-account-name"
+    warehouse: "COMPUTE_WH"
+    database: "SNOWFLAKE"
+    schema: "ACCOUNT_USAGE"
+    
+    # ========================================================================
+    # CARDINALITY PROTECTION (Circuit Breakers)
+    # Prevents metric explosion from high-cardinality dimensions
+    # Trial accounts typically have lower cardinality, but good practice
+    # ========================================================================
+    max_users_cardinality: 500       # Max unique users before fallback
+    max_schemas_cardinality: 200     # Max unique schemas before fallback
+    max_databases_cardinality: 100   # Max unique databases before fallback
+    max_roles_cardinality: 200       # Max unique roles before fallback
+    
+    # ========================================================================
+    # PERFORMANCE & RELIABILITY SETTINGS
+    # Trial account safe defaults - conservative rate limiting
+    # ========================================================================
+    query_timeout: "30s"             # Timeout per Snowflake query
+    max_rows_per_query: 10000        # Limit rows per query (prevents OOM)
+    rate_limit_qps: 5                # Max 5 queries/sec (trial safe limit)
+    max_retries: 3                   # Retry failed queries 3 times
+    retry_initial_delay: "1s"        # Start with 1s delay between retries
+    retry_max_delay: "30s"           # Max 30s delay between retries
+    
+    # ========================================================================
+    # METRICS CONFIGURATION
+    # Based on validation - only enabled metrics with actual data
+    # ========================================================================
+    metrics:
+      # =====================================================================
+      # REAL-TIME METRICS (INFORMATION_SCHEMA - Seconds Latency)
+      # Poll frequently for operational monitoring
+      # =====================================================================
+      current_queries:
+        enabled: true
+        interval: "1m"               # Poll every 1 minute (real-time ops)
+        # Provides: Query count, execution time, bytes scanned
+        # Dimensions: warehouse, database, schema, user, role, query_type, status
+      
+      warehouse_load:
+        enabled: true
+        interval: "1m"               # Poll every 1 minute (real-time load)
+        # Provides: Running queries, queued load, queued provisioning, blocked
+        # Dimensions: warehouse_name
+      
+      # =====================================================================
+      # HISTORICAL METRICS (ACCOUNT_USAGE - 45min-3hr Latency)
+      # Poll less frequently since data updates slowly
+      # =====================================================================
+      query_history:
+        enabled: true
+        interval: "5m"               # Poll every 5 minutes (good balance)
+        # Provides: Detailed query analytics, performance metrics
+        # Dimensions: warehouse, database, schema, user, role, query_type, status
+      
+      credit_usage:
+        enabled: true
+        interval: "5m"               # Poll every 5 minutes
+        # Provides: Credit consumption by warehouse (compute + cloud services)
+        # Dimensions: warehouse_name
+        # Note: Critical for cost tracking
+      
+      login_history:
+        enabled: true
+        interval: "10m"              # Poll every 10 minutes (security events)
+        # Provides: Login attempts (success/failure), authentication events
+        # Dimensions: user_name, client_type, error_message
+      
+      # =====================================================================
+      # STORAGE METRICS (ACCOUNT_USAGE - Updates Daily)
+      # Poll infrequently since data changes slowly
+      # =====================================================================
+      storage_metrics:
+        enabled: true
+        interval: "30m"              # Poll every 30 minutes (updates daily)
+        # Provides: Account-level storage (total, stage, failsafe)
+        # No dimensions (account-level aggregation)
+      
+      database_storage:
+        enabled: true
+        interval: "30m"              # Poll every 30 minutes (updates daily)
+        # Provides: Database-level storage breakdown
+        # Dimensions: database_name
+      
+      # =====================================================================
+      # TASK EXECUTION (ACCOUNT_USAGE - Task runs)
+      # =====================================================================
+      task_history:
+        enabled: true
+        interval: "10m"              # Poll every 10 minutes
+        # Provides: Task execution metrics, success/failure rates
+        # Dimensions: database_name, schema_name, task_name, state
+      
+      # =====================================================================
+      # DISABLED METRICS (No data in trial account)
+      # Enable these in paid environments if you use these features
+      # =====================================================================
+      data_pipeline:
+        enabled: false               # No Snowpipe data in trial
+        interval: "10m"
+        # Would provide: Snowpipe credits, bytes/files inserted
+      
+      replication_usage:
+        enabled: false               # No replication in trial
+        interval: "15m"
+        # Would provide: Replication credits, bytes transferred
+      
+      auto_clustering_history:
+        enabled: false               # Enterprise feature not in trial
+        interval: "15m"
+        # Would provide: Auto-clustering credits, bytes reclustered
+    
+    # ========================================================================
+    # EVENT TABLES (Seconds-Level Latency) - Disabled (requires setup)
+    # ========================================================================
+    event_tables:
+      enabled: false
+      # To enable:
+      # 1. CREATE EVENT TABLE SNOWFLAKE.PUBLIC.MY_EVENT_TABLE;
+      # 2. ALTER SESSION SET EVENT_TABLE = 'SNOWFLAKE.PUBLIC.MY_EVENT_TABLE';
+      # 3. Set table_name below and enable
+      table_name: "SNOWFLAKE.ACCOUNT_USAGE.EVENT_TABLE"
+      
+      query_logs:
+        enabled: false
+        interval: "30s"
+      
+      task_logs:
+        enabled: false
+        interval: "30s"
+    
+    # ========================================================================
+    # ORGANIZATION METRICS (Multi-Account) - Disabled (requires Enterprise)
+    # ========================================================================
+    organization:
+      enabled: false
+      # Requires: Enterprise edition + ORGADMIN role + multiple accounts
+    
+    # ========================================================================
+    # CUSTOM QUERIES - Disabled (use built-in metrics first)
+    # ========================================================================
+    custom_queries:
+      enabled: false
+      queries: []
+
+# ============================================================================
+# PROCESSORS
+# ============================================================================
+processors:
+  batch:
+    timeout: 10s                     # Batch metrics every 10 seconds
+    send_batch_size: 1000            # Send when batch reaches 1000 metrics
+
+# ============================================================================
+# EXPORTERS
+# ============================================================================
+exporters:
+  otlphttp:
+    endpoint: "https://YOUR_TENANT.live.dynatrace.com/api/v2/otlp"
+    headers:
+      Authorization: "Api-Token YOUR_DYNATRACE_API_TOKEN"
+
+# ============================================================================
+# SERVICE PIPELINE
+# ============================================================================
+service:
+  pipelines:
+    metrics:
+      receivers: [snowflake]
+      processors: [batch]
+      exporters: [otlphttp]
+
+# ============================================================================
+# EXPECTED METRICS OUTPUT (Trial Account)
+# ============================================================================
+# With these settings, expect approximately:
+# - ~35 metrics/minute from current_queries (1m interval, real-time)
+# - ~25 metrics/minute from warehouse_load (1m interval, real-time)
+# - ~40 metrics/5min from query_history (5m interval, historical)
+# - ~10 metrics/5min from credit_usage (5m interval, historical)
+# - ~15 metrics/10min from login_history (10m interval, security)
+# - ~5 metrics/30min from storage_metrics (30m interval, daily data)
+# - ~3 metrics/30min from database_storage (30m interval, daily data)
+# - ~8 metrics/10min from task_history (10m interval, task runs)
+#
+# Total: ~60 metrics/minute average (~86,400 metrics/day)
+#
+# Rate limiting at 5 QPS is safe for trial accounts and prevents throttling
+# ============================================================================

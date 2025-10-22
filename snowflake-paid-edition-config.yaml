@@ -1,0 +1,632 @@
+# ============================================================================
+# SNOWFLAKE RECEIVER CONFIG - ENTERPRISE PRODUCTION
+# ============================================================================
+# Comprehensive configuration for production Enterprise+ Snowflake deployments
+# Includes all 11 metric categories, Event Tables, Organization metrics,
+# and custom query examples.
+#
+# FEATURES ENABLED:
+# ✅ All 11 standard metric categories (300+ metrics)
+# ✅ Real-time operational monitoring (1-minute intervals)
+# ✅ Historical analytics with appropriate polling
+# ✅ Cardinality protection for high-scale environments
+# ✅ Rate limiting tuned for production workloads
+# ✅ Event Tables for seconds-level latency (requires setup)
+# ✅ Organization-level metrics (multi-account monitoring)
+# ✅ Custom queries for business-specific metrics
+#
+# LATENCY PROFILE:
+# - Real-time (seconds): INFORMATION_SCHEMA + Event Tables
+# - Near real-time (1-5min): Current queries, warehouse load
+# - Historical (45min-3hr): ACCOUNT_USAGE metrics
+# - Daily aggregates: Storage, database storage
+#
+# PRODUCTION RECOMMENDATIONS:
+# - Dedicated XS warehouse for monitoring (auto-suspend 30s)
+# - Service account with MFA disabled for automation
+# - Rate limit 10-15 QPS for high-volume environments
+# - Monitor receiver self-metrics for health tracking
+# - Adjust cardinality limits based on environment size
+# ============================================================================
+
+receivers:
+  snowflake:
+    # ========================================================================
+    # CONNECTION SETTINGS
+    # Production best practices:
+    # - Use dedicated monitoring warehouse (XS size, 30s auto-suspend)
+    # - Service account with least-privilege access
+    # - Consider key-pair authentication (not yet implemented)
+    # ========================================================================
+    user: "MONITORING_SERVICE_ACCOUNT"
+    password: "USE_STRONG_PASSWORD_OR_VAULT"
+    account: "your-prod-account"
+    warehouse: "MONITORING_WH"       # Dedicated XS warehouse recommended
+    database: "SNOWFLAKE"
+    schema: "ACCOUNT_USAGE"
+    
+    # ========================================================================
+    # CARDINALITY PROTECTION (Circuit Breakers)
+    # CRITICAL for production: Prevents metric explosion in large environments
+    # Adjust these based on your environment:
+    # - Small (< 100 users): Use defaults
+    # - Medium (100-1000 users): Increase by 2-3x
+    # - Large (1000+ users): Increase by 5-10x or disable cardinality tracking
+    # ========================================================================
+    max_users_cardinality: 1000      # Increase for large orgs (default: 500)
+    max_schemas_cardinality: 500     # Increase if many schemas (default: 200)
+    max_databases_cardinality: 200   # Typically sufficient (default: 100)
+    max_roles_cardinality: 500       # Increase for complex RBAC (default: 200)
+    
+    # What happens when limits are hit:
+    # - New dimension values → labeled as "high_cardinality_<dimension>"
+    # - Aggregated metrics still collected, just less granular
+    # - Prevents OOM and backend metric explosion
+    # - Resets every 24 hours
+    
+    # ========================================================================
+    # PERFORMANCE & RELIABILITY SETTINGS
+    # Production-tuned for high-volume environments
+    # ========================================================================
+    query_timeout: "60s"             # Increased for complex queries (default: 30s)
+    max_rows_per_query: 50000        # Higher for large result sets (default: 10000)
+    rate_limit_qps: 15               # Max 15 queries/sec for production (default: 10)
+                                     # Formula: (# enabled categories × avg queries per category) / interval
+                                     # Example: 11 categories × 1-2 queries each / 1min = ~0.2-0.4 QPS
+                                     # 15 QPS provides 37x headroom for spikes
+    
+    max_retries: 3                   # Retry failed queries (default: 3)
+    retry_initial_delay: "2s"        # Increased for transient failures (default: 1s)
+    retry_max_delay: "60s"           # Increased max backoff (default: 30s)
+    
+    # Snowflake credit consumption estimate:
+    # - XS warehouse: ~0.0006 credits per second
+    # - 15 queries/min average: ~0.25 credits/hour
+    # - ~6 credits/day for continuous monitoring
+    # - ~180 credits/month for comprehensive observability
+    
+    # ========================================================================
+    # METRICS CONFIGURATION - ALL CATEGORIES ENABLED
+    # ========================================================================
+    metrics:
+      # =====================================================================
+      # REAL-TIME OPERATIONAL METRICS (INFORMATION_SCHEMA)
+      # Seconds-level latency - critical for ops monitoring and alerting
+      # =====================================================================
+      current_queries:
+        enabled: true
+        interval: "1m"               # Poll every 1 minute for near real-time
+        # Purpose: Live operational monitoring
+        # Provides: Active queries, execution time, bytes scanned, errors
+        # Dimensions: warehouse, database, schema, user, role, query_type, 
+        #             execution_status, error_code
+        # Use cases:
+        # - Real-time dashboards showing current activity
+        # - Alerting on long-running queries
+        # - Detecting query failures immediately
+        # - Capacity planning based on concurrent load
+        # Best practice: 1-minute interval for operational visibility
+      
+      warehouse_load:
+        enabled: true
+        interval: "1m"               # Poll every 1 minute for capacity monitoring
+        # Purpose: Warehouse performance and capacity tracking
+        # Provides: Running queries, queued (load), queued (provisioning), blocked
+        # Dimensions: warehouse_name
+        # Use cases:
+        # - Detect warehouse overload (high queued_load)
+        # - Identify undersized warehouses (consistent queuing)
+        # - Alert on blocked queries (concurrency issues)
+        # - Auto-scaling triggers based on queue depth
+        # Best practice: 1-minute interval for capacity decisions
+      
+      # =====================================================================
+      # HISTORICAL ANALYTICS (ACCOUNT_USAGE - 45min-3hr latency)
+      # Poll every 5 minutes since data updates slowly
+      # =====================================================================
+      query_history:
+        enabled: true
+        interval: "5m"               # Poll every 5 minutes (good balance)
+        # Purpose: Detailed query performance analytics
+        # Provides: Query count, avg execution time, bytes scanned/written,
+        #           rows produced, compilation time
+        # Dimensions: warehouse, database, schema, user, role, query_type,
+        #             execution_status, error_code
+        # Use cases:
+        # - Identify expensive queries for optimization
+        # - Track query performance trends over time
+        # - Cost attribution by user/team/project
+        # - Anomaly detection on query patterns
+        # Best practice: 5-minute interval balances freshness vs query cost
+        # Note: Duplicate of current_queries but with richer history
+      
+      credit_usage:
+        enabled: true
+        interval: "5m"               # Poll every 5 minutes for cost tracking
+        # Purpose: Warehouse credit consumption and cost management
+        # Provides: Total credits, compute credits, cloud service credits
+        # Dimensions: warehouse_name
+        # Use cases:
+        # - Real-time cost monitoring and alerting
+        # - Budget tracking and forecasting
+        # - Warehouse cost attribution
+        # - Detect cost anomalies (runaway warehouses)
+        # Best practice: 5-minute interval for cost visibility
+        # Critical metric: Tie to billing alerts
+      
+      # =====================================================================
+      # STORAGE METRICS (Updates Daily - Poll Infrequently)
+      # =====================================================================
+      storage_metrics:
+        enabled: true
+        interval: "30m"              # Poll every 30 minutes (daily updates)
+        # Purpose: Account-level storage tracking
+        # Provides: Total storage, stage storage, failsafe storage
+        # Dimensions: None (account-level)
+        # Use cases:
+        # - Storage growth trending
+        # - Capacity planning
+        # - Cost forecasting (storage credits)
+        # - Data retention policy validation
+        # Best practice: 30-minute interval (data updates daily)
+      
+      database_storage:
+        enabled: true
+        interval: "30m"              # Poll every 30 minutes (daily updates)
+        # Purpose: Database-level storage breakdown
+        # Provides: Storage bytes per database
+        # Dimensions: database_name
+        # Use cases:
+        # - Database storage attribution
+        # - Identify databases consuming most storage
+        # - Cleanup prioritization
+        # - Chargeback by database/team
+        # Best practice: 30-minute interval (data updates daily)
+      
+      # =====================================================================
+      # SECURITY & COMPLIANCE
+      # =====================================================================
+      login_history:
+        enabled: true
+        interval: "10m"              # Poll every 10 minutes for security events
+        # Purpose: Authentication and access monitoring
+        # Provides: Login attempts, success/failure, error messages
+        # Dimensions: user_name, client_type, error_message
+        # Use cases:
+        # - Brute force detection
+        # - Failed login alerting
+        # - Compliance auditing (SOC2, HIPAA)
+        # - Anomalous access patterns
+        # - Geographic login anomalies
+        # Best practice: 10-minute interval for security visibility
+        # Consider: Integrate with SIEM for correlation
+      
+      # =====================================================================
+      # DATA ENGINEERING & ETL MONITORING
+      # =====================================================================
+      data_pipeline:
+        enabled: true
+        interval: "10m"              # Poll every 10 minutes for pipeline health
+        # Purpose: Snowpipe ingestion monitoring
+        # Provides: Snowpipe credits, bytes inserted, files inserted
+        # Dimensions: pipe_name
+        # Use cases:
+        # - Pipeline health monitoring
+        # - Ingestion rate tracking
+        # - Data freshness validation
+        # - Pipeline cost attribution
+        # - SLA compliance (data latency)
+        # Best practice: 10-minute interval for ETL monitoring
+        # Note: Only emits metrics if Snowpipe is configured
+      
+      task_history:
+        enabled: true
+        interval: "10m"              # Poll every 10 minutes for task execution
+        # Purpose: Scheduled task monitoring
+        # Provides: Task execution count, success/failure rates
+        # Dimensions: database_name, schema_name, task_name, state
+        # Use cases:
+        # - Task execution monitoring
+        # - Failure detection and alerting
+        # - Task dependency tracking
+        # - Execution time trends
+        # - Cost per task calculation
+        # Best practice: 10-minute interval for task health
+      
+      # =====================================================================
+      # ENTERPRISE FEATURES (May not be used in all environments)
+      # =====================================================================
+      replication_usage:
+        enabled: true
+        interval: "15m"              # Poll every 15 minutes
+        # Purpose: Database replication monitoring
+        # Provides: Replication credits, bytes transferred
+        # Dimensions: database_name
+        # Use cases:
+        # - Replication cost tracking
+        # - DR/HA validation
+        # - Cross-region data transfer monitoring
+        # - Replication lag detection
+        # Best practice: 15-minute interval (replication runs less frequently)
+        # Note: Only emits metrics if replication is configured
+      
+      auto_clustering_history:
+        enabled: true
+        interval: "15m"              # Poll every 15 minutes
+        # Purpose: Automatic table clustering monitoring
+        # Provides: Auto-clustering credits, bytes reclustered, rows reclustered
+        # Dimensions: database_name, schema_name, table_name
+        # Use cases:
+        # - Clustering cost tracking
+        # - Table maintenance monitoring
+        # - Query performance correlation
+        # - Clustering efficiency analysis
+        # Best practice: 15-minute interval (clustering runs periodically)
+        # Note: Enterprise feature - only emits if auto-clustering is enabled
+    
+    # ========================================================================
+    # EVENT TABLES (SECONDS-LEVEL LATENCY) - PRODUCTION RECOMMENDED
+    # ========================================================================
+    # Event Tables provide near real-time monitoring (seconds vs hours)
+    # Critical for operational monitoring and real-time alerting
+    #
+    # SETUP REQUIRED:
+    # 1. Create Event Table:
+    #    CREATE EVENT TABLE SNOWFLAKE.PUBLIC.MONITORING_EVENT_TABLE;
+    #
+    # 2. Enable globally (one-time):
+    #    ALTER ACCOUNT SET EVENT_TABLE = 'SNOWFLAKE.PUBLIC.MONITORING_EVENT_TABLE';
+    #    -- OR per session:
+    #    ALTER SESSION SET EVENT_TABLE = 'SNOWFLAKE.PUBLIC.MONITORING_EVENT_TABLE';
+    #
+    # 3. Verify:
+    #    SHOW PARAMETERS LIKE 'EVENT_TABLE' IN ACCOUNT;
+    #
+    # 4. Update table_name below and enable
+    #
+    # Production benefit: Reduces monitoring latency from 45min-3hr to seconds
+    # ========================================================================
+    event_tables:
+      enabled: true                  # Enable for production
+      table_name: "SNOWFLAKE.PUBLIC.MONITORING_EVENT_TABLE"  # Update to your table
+      
+      query_logs:
+        enabled: true
+        interval: "30s"              # Poll every 30 seconds (near real-time)
+        # Purpose: Real-time query execution tracking
+        # Provides: Query execution events with full trace context
+        # Use cases:
+        # - Real-time query failure detection
+        # - Performance anomaly alerting
+        # - Error pattern analysis
+        # - Distributed tracing integration
+        # Best practice: 30s interval for operational monitoring
+        # Latency: Seconds vs 45min-3hr for ACCOUNT_USAGE
+      
+      task_logs:
+        enabled: true
+        interval: "30s"              # Poll every 30 seconds (near real-time)
+        # Purpose: Real-time task execution monitoring
+        # Provides: Task start/completion events, errors, trace context
+        # Use cases:
+        # - Task failure immediate detection
+        # - Pipeline orchestration monitoring
+        # - Dependency chain tracking
+        # - Real-time SLA validation
+        # Best practice: 30s interval for ETL monitoring
+        # Latency: Seconds vs 45min-3hr for ACCOUNT_USAGE
+    
+    # ========================================================================
+    # ORGANIZATION METRICS (MULTI-ACCOUNT MONITORING)
+    # ========================================================================
+    # Requires: Enterprise edition + ORGADMIN role
+    # Monitors across ALL accounts in your Snowflake organization
+    #
+    # PREREQUISITES:
+    # 1. Enterprise or Business Critical edition
+    # 2. ORGADMIN role granted to monitoring service account:
+    #    GRANT ROLE ORGADMIN TO USER monitoring_service_account;
+    # 3. Access to ORGANIZATION_USAGE schema
+    #
+    # Common issue: Column names vary by Snowflake version
+    # If you get "invalid identifier" errors, run:
+    #    DESCRIBE TABLE SNOWFLAKE.ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY;
+    # Then configure custom column names below
+    # ========================================================================
+    organization:
+      enabled: true                  # Enable for multi-account monitoring
+      
+      # Column name customization (uncomment if needed)
+      # Use if you get "invalid identifier" errors
+      # organization_name_column: "ORGANIZATION_NAME"
+      # account_name_column: "ACCOUNT_NAME"
+      
+      org_credit_usage:
+        enabled: true
+        interval: "1h"               # Poll every hour (org-wide aggregation)
+        # Purpose: Organization-wide credit consumption
+        # Provides: Credits across all accounts, by service type
+        # Dimensions: organization_name, account_name, service_type
+        # Use cases:
+        # - Enterprise-wide cost tracking
+        # - Account-level chargeback
+        # - Budget management across org
+        # - Service-level cost attribution (compute vs storage vs transfer)
+        # Best practice: Hourly interval (data updates hourly)
+        
+        # Custom column mapping (uncomment if needed):
+        # columns:
+        #   organization_name: "ORG_NAME"
+        #   account_name: "ACCOUNT_ID"
+        #   service_type: "SERVICE"
+        #   credits_used: "CREDITS_CONSUMED"
+        #   usage_date: "DATE"
+      
+      org_storage_usage:
+        enabled: true
+        interval: "1h"               # Poll every hour
+        # Purpose: Organization-wide storage tracking
+        # Provides: Storage bytes across all accounts
+        # Dimensions: organization_name, account_name
+        # Use cases:
+        # - Enterprise storage capacity planning
+        # - Account storage attribution
+        # - Data retention policy enforcement
+        # Best practice: Hourly interval
+      
+      org_data_transfer:
+        enabled: true
+        interval: "1h"               # Poll every hour
+        # Purpose: Cross-account and cross-region data transfers
+        # Provides: Bytes transferred, source/target accounts and regions
+        # Dimensions: source_account, target_account, source_region, target_region
+        # Use cases:
+        # - Data transfer cost tracking
+        # - Network topology optimization
+        # - Cross-region replication monitoring
+        # - Data locality compliance (GDPR, data residency)
+        # Best practice: Hourly interval
+      
+      org_contract_usage:
+        enabled: true
+        interval: "12h"              # Poll twice daily (updates daily)
+        # Purpose: Contract and capacity tracking
+        # Provides: Capacity commitments, consumption against contract
+        # Dimensions: organization_name
+        # Use cases:
+        # - Capacity vs consumption tracking
+        # - Contract utilization monitoring
+        # - Budget forecasting
+        # - Overage alerting
+        # Best practice: 12-hour interval (daily updates)
+    
+    # ========================================================================
+    # CUSTOM QUERIES - BUSINESS-SPECIFIC METRICS
+    # ========================================================================
+    # Extend the receiver with your own SQL queries
+    # Use cases:
+    # - Custom business metrics not in standard set
+    # - Application-specific monitoring
+    # - Cost allocation by custom tags
+    # - Performance metrics on specific tables
+    # ========================================================================
+    custom_queries:
+      enabled: true
+      queries:
+        # Example 1: Query cost by user (last hour)
+        - name: "query_cost_by_user"
+          interval: "5m"
+          metric_type: "gauge"       # gauge, counter, or histogram
+          value_column: "TOTAL_CREDITS"
+          label_columns: ["USER_NAME", "WAREHOUSE_NAME"]
+          sql: |
+            SELECT 
+              USER_NAME,
+              WAREHOUSE_NAME,
+              SUM(CREDITS_USED_CLOUD_SERVICES) as TOTAL_CREDITS
+            FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
+            WHERE START_TIME >= DATEADD(hour, -1, CURRENT_TIMESTAMP())
+              AND CREDITS_USED_CLOUD_SERVICES > 0
+            GROUP BY USER_NAME, WAREHOUSE_NAME
+            ORDER BY TOTAL_CREDITS DESC
+            LIMIT 100
+        
+        # Example 2: Large table scan efficiency
+        - name: "table_scan_efficiency"
+          interval: "10m"
+          metric_type: "gauge"
+          value_column: "SCAN_EFFICIENCY_PCT"
+          label_columns: ["DATABASE_NAME", "SCHEMA_NAME", "TABLE_NAME"]
+          sql: |
+            SELECT 
+              DATABASE_NAME,
+              SCHEMA_NAME,
+              QUERY_TEXT,
+              REGEXP_SUBSTR(QUERY_TEXT, 'FROM\\s+(\\w+\\.\\w+\\.\\w+)', 1, 1, 'i', 1) as TABLE_NAME,
+              (PERCENTAGE_SCANNED_FROM_CACHE * 100) as SCAN_EFFICIENCY_PCT
+            FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
+            WHERE START_TIME >= DATEADD(hour, -1, CURRENT_TIMESTAMP())
+              AND BYTES_SCANNED > 1000000000  -- >1GB scans only
+              AND DATABASE_NAME IS NOT NULL
+            LIMIT 100
+        
+        # Example 3: Failed queries by error type
+        - name: "failed_queries_by_error"
+          interval: "5m"
+          metric_type: "gauge"
+          value_column: "FAILURE_COUNT"
+          label_columns: ["ERROR_CODE", "WAREHOUSE_NAME"]
+          sql: |
+            SELECT 
+              COALESCE(ERROR_CODE, 'UNKNOWN') as ERROR_CODE,
+              WAREHOUSE_NAME,
+              COUNT(*) as FAILURE_COUNT
+            FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
+            WHERE START_TIME >= DATEADD(hour, -1, CURRENT_TIMESTAMP())
+              AND EXECUTION_STATUS = 'FAIL'
+            GROUP BY ERROR_CODE, WAREHOUSE_NAME
+            HAVING COUNT(*) >= 5  -- Only errors with 5+ occurrences
+
+# ============================================================================
+# PROCESSORS
+# ============================================================================
+processors:
+  batch:
+    timeout: 10s                     # Batch metrics every 10 seconds
+    send_batch_size: 5000            # Increased for high-volume production
+    send_batch_max_size: 10000       # Max batch size before forcing send
+  
+  # Optional: Add resource processor to tag environment
+  # resource:
+  #   attributes:
+  #     - key: environment
+  #       value: production
+  #       action: insert
+  #     - key: snowflake_region
+  #       value: us-east-1
+  #       action: insert
+
+# ============================================================================
+# EXPORTERS
+# ============================================================================
+exporters:
+  # Primary export to Dynatrace
+  otlphttp:
+    endpoint: "https://YOUR_TENANT.live.dynatrace.com/api/v2/otlp"
+    headers:
+      Authorization: "Api-Token YOUR_DYNATRACE_API_TOKEN"
+    compression: gzip                # Enable compression for large payloads
+    timeout: 30s
+  
+  # Optional: Debug exporter for troubleshooting
+  # debug:
+  #   verbosity: detailed
+  #   sampling_initial: 5
+  #   sampling_thereafter: 200
+
+# ============================================================================
+# EXTENSIONS (Optional but Recommended)
+# ============================================================================
+extensions:
+  # Health check endpoint
+  health_check:
+    endpoint: ":13133"
+  
+  # Performance profiling (disable in prod unless debugging)
+  # pprof:
+  #   endpoint: ":1777"
+  
+  # zpages for debugging
+  # zpages:
+  #   endpoint: ":55679"
+
+# ============================================================================
+# SERVICE PIPELINE
+# ============================================================================
+service:
+  # Extensions to enable
+  extensions: [health_check]
+  
+  pipelines:
+    metrics:
+      receivers: [snowflake]
+      processors: [batch]
+      exporters: [otlphttp]
+  
+  # Telemetry for receiver health monitoring
+  telemetry:
+    logs:
+      level: info                    # Use "debug" for troubleshooting
+    metrics:
+      level: detailed                # Collect receiver self-metrics
+      address: ":8888"               # Prometheus endpoint for self-monitoring
+
+# ============================================================================
+# PRODUCTION DEPLOYMENT CHECKLIST
+# ============================================================================
+# □ Dedicated XS warehouse with 30s auto-suspend
+# □ Service account with ACCOUNTADMIN or monitoring-specific role
+# □ MFA disabled on service account (or use key-pair auth when available)
+# □ Credentials stored in vault/secrets manager (not in config file)
+# □ Rate limiting tuned to your query volume (monitor for throttling)
+# □ Cardinality limits adjusted for your environment size
+# □ Event Tables created and enabled for seconds-level latency
+# □ Organization metrics enabled if multi-account Enterprise
+# □ Custom queries added for business-specific metrics
+# □ Health check endpoint monitored
+# □ Self-monitoring metrics exported (receiver.queries.total, etc.)
+# □ Alerting configured for:
+#   - Receiver errors (snowflake.receiver.errors.total)
+#   - High cardinality dropped values
+#   - Query failures in Snowflake
+#   - Credit consumption anomalies
+# □ Log aggregation configured (ELK, Splunk, etc.)
+# □ Runbook documented for common issues
+# ============================================================================
+
+# ============================================================================
+# EXPECTED METRICS OUTPUT (Production with All Features)
+# ============================================================================
+# With all categories enabled, expect approximately:
+# - ~50 metrics/minute from current_queries (1m interval, real-time)
+# - ~30 metrics/minute from warehouse_load (1m interval, real-time)
+# - ~120 metrics/minute from event_query_logs (30s interval, real-time)
+# - ~40 metrics/minute from event_task_logs (30s interval, real-time)
+# - ~60 metrics/5min from query_history (5m interval, historical)
+# - ~20 metrics/5min from credit_usage (5m interval, cost)
+# - ~25 metrics/10min from login_history (10m interval, security)
+# - ~15 metrics/10min from data_pipeline (10m interval, ETL)
+# - ~20 metrics/10min from task_history (10m interval, tasks)
+# - ~10 metrics/30min from storage_metrics (30m interval, storage)
+# - ~8 metrics/30min from database_storage (30m interval, storage)
+# - ~12 metrics/15min from replication_usage (15m interval, replication)
+# - ~15 metrics/15min from auto_clustering (15m interval, clustering)
+# - ~30 metrics/hour from org_credit_usage (1h interval, org-wide)
+# - ~20 metrics/hour from org_storage_usage (1h interval, org-wide)
+# - ~25 metrics/hour from org_data_transfer (1h interval, org-wide)
+# - ~5 metrics/12h from org_contract_usage (12h interval, contracts)
+# - ~30 metrics/5-10min from custom queries (varies by query)
+#
+# Total: ~500-800 metrics/minute average (~720K-1.15M metrics/day)
+#
+# Rate limiting at 15 QPS handles peak loads with 30x headroom
+# Snowflake credit consumption: ~6 credits/day (~180 credits/month)
+# ============================================================================
+
+# ============================================================================
+# TROUBLESHOOTING GUIDE
+# ============================================================================
+# Common issues and solutions:
+#
+# 1. "invalid identifier" errors:
+#    - Column names vary by Snowflake version
+#    - Solution: Run DESCRIBE TABLE on failing table, update column names in config
+#
+# 2. Empty metrics (no data):
+#    - Feature not enabled (Snowpipe, replication, clustering)
+#    - Solution: Normal behavior - metrics only emit when feature has data
+#
+# 3. High cardinality warnings:
+#    - Too many unique dimension values
+#    - Solution: Increase cardinality limits or accept aggregated dimensions
+#
+# 4. Rate limiting errors:
+#    - Too many queries per second
+#    - Solution: Increase rate_limit_qps or increase polling intervals
+#
+# 5. Query timeouts:
+#    - Complex queries on large data sets
+#    - Solution: Increase query_timeout or reduce max_rows_per_query
+#
+# 6. High Snowflake costs:
+#    - Warehouse too large or not auto-suspending
+#    - Solution: Use XS warehouse with 30s auto-suspend
+#
+# 7. Missing organization metrics:
+#    - ORGADMIN role not granted
+#    - Solution: Grant ORGADMIN to monitoring service account
+#
+# 8. Event Table metrics not appearing:
+#    - Event Table not created or not set in session
+#    - Solution: Create Event Table and set EVENT_TABLE parameter
+# ============================================================================
