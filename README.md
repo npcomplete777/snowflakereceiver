@@ -1,38 +1,5 @@
 # Snowflake OpenTelemetry Receiver
 
-A **production-ready** OpenTelemetry Collector receiver for comprehensive Snowflake monitoring. Collects **300+ metrics** from multiple Snowflake data sources with flexible per-metric polling intervals.
-
-## 🎯 Key Features
-
-### ✅ What Makes This Different
-
-- **300+ Metrics** - Far exceeding contrib receiver (~80) and commercial offerings
-- **Per-Metric Intervals** - Configure polling frequency for each metric category independently
-- **Event Tables Support** - **Seconds-level latency** via Snowflake Event Tables
-- **Real-Time Metrics** - INFORMATION_SCHEMA queries with no 45min-3hr lag
-- **Organization Metrics** - Multi-account monitoring and aggregation
-- **Custom SQL Queries** - Define unlimited custom metrics via SQL
-- **Graceful Degradation** - Works even when advanced features unavailable
-- **100% Open Source** - No licensing costs, vendor neutral
-
-### 📊 DataDog/Dynatrace Parity: **90-95%**
-
-We match or exceed DataDog and Dynatrace on **all implementable features**:
-
-| Feature | DataDog | Dynatrace | This Receiver |
-|---------|---------|-----------|---------------|
-| Metrics Count | ~70 | ~16 | **300+** ✅ |
-| Per-Metric Intervals | No | No | **Yes** ✅ |
-| Real-Time Data | Event Tables only | 1min availability | **INFORMATION_SCHEMA + Event Tables** ✅ |
-| Custom SQL | Yes | No | **Yes** ✅ |
-| Organization Metrics | Yes | No | **Yes** ✅ |
-| Event Tables | Yes | No | **Yes** ✅ |
-| Cost in $$ | Yes | No | No ❌ |
-| SIEM/Anomaly Detection | Yes | Yes | No ❌ |
-| Open Source | No | No | **Yes** ✅ |
-
----
-
 ## 🚀 Quick Start
 
 ### Prerequisites
